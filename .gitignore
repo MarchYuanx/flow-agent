@@ -1,0 +1,46 @@
+## 依赖
+node_modules/
+
+## 构建产物
+dist/
+build/
+out/
+coverage/
+
+## 环境变量（避免泄漏）
+.env
+.env.*
+!.env.example
+
+## 日志与运行时文件
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+## 缓存/临时目录
+.cache/
+.tmp/
+.temp/
+.vite/
+.vite-temp/
+
+## TypeScript
+*.tsbuildinfo
+
+## IDE / 编辑器
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+## OS 文件
+.DS_Store
+Thumbs.db
+
+## 其他
+*.local

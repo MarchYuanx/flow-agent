@@ -436,64 +436,6 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
 
             <button
               type="button"
-              onClick={() => openPreview({ title: data.title, imageUrl: activeUrl })}
-              className="inline-flex h-8 shrink-0 items-center gap-1 whitespace-nowrap rounded-xl px-2.5 text-xs font-semibold text-slate-100 hover:bg-slate-800/50 active:bg-slate-800/70"
-              title="预览"
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-200" aria-hidden="true">
-                <path
-                  fill="currentColor"
-                  d="M12 5c5.5 0 9.6 5 9.6 7s-4.1 7-9.6 7S2.4 14 2.4 12 6.5 5 12 5Zm0 2c-3.9 0-6.8 3.7-6.8 5s2.9 5 6.8 5 6.8-3.7 6.8-5-2.9-5-6.8-5Zm0 2.2A2.8 2.8 0 1 1 12 14.8a2.8 2.8 0 0 1 0-5.6Z"
-                />
-              </svg>
-              预览
-            </button>
-
-            <button
-              type="button"
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(activeUrl)
-                  appendChatMessage({ role: 'system', kind: 'text', text: '已复制图片 URL。' })
-                } catch {
-                  appendChatMessage({ role: 'system', kind: 'text', text: '复制失败，请手动复制。' })
-                }
-              }}
-              className="inline-flex h-8 shrink-0 items-center gap-1 whitespace-nowrap rounded-xl px-2.5 text-xs font-semibold text-slate-100 hover:bg-slate-800/50 active:bg-slate-800/70"
-              title="复制URL"
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-200" aria-hidden="true">
-                <path
-                  fill="currentColor"
-                  d="M8 7a3 3 0 0 1 3-3h7a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3h-7a3 3 0 0 1-3-3V7Zm3-1a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-7ZM4 8a3 3 0 0 1 3-3h1v2H7a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1h2v1a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V8Z"
-                />
-              </svg>
-              复制
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                try {
-                  window.open(activeUrl, '_blank', 'noopener,noreferrer')
-                } catch {
-                  // no-op
-                }
-              }}
-              className="inline-flex h-8 shrink-0 items-center gap-1 whitespace-nowrap rounded-xl px-2.5 text-xs font-semibold text-slate-100 hover:bg-slate-800/50 active:bg-slate-800/70"
-              title="下载（打开新标签）"
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-200" aria-hidden="true">
-                <path
-                  fill="currentColor"
-                  d="M12 3a1 1 0 0 1 1 1v8.6l2.3-2.3 1.4 1.4-4.7 4.7-4.7-4.7 1.4-1.4 2.3 2.3V4a1 1 0 0 1 1-1Zm-7 14h2v2h10v-2h2v4H5v-4Z"
-                />
-              </svg>
-              下载
-            </button>
-
-            <button
-              type="button"
               onClick={() => deleteNode(id)}
               className="inline-flex h-8 shrink-0 items-center gap-1 whitespace-nowrap rounded-xl px-2.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/10 active:bg-rose-500/15"
               title="删除节点"

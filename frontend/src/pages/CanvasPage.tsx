@@ -39,6 +39,7 @@ export function CanvasPage() {
   const setGenerateImageFn = useCanvasStore((s) => s.setGenerateImageFn)
   const setApplyImageActionFn = useCanvasStore((s) => s.setApplyImageActionFn)
   const setGenerateVideoFn = useCanvasStore((s) => s.setGenerateVideoFn)
+  const setSaveCanvasFn = useCanvasStore((s) => s.setSaveCanvasFn)
   const openFavorites = useCanvasStore((s) => s.openFavorites)
   const preview = useCanvasStore((s) => s.preview)
   const closePreview = useCanvasStore((s) => s.closePreview)
@@ -90,18 +91,22 @@ export function CanvasPage() {
     setGenerateImageFn(api.generateImage)
     setApplyImageActionFn(api.applyImageAction)
     setGenerateVideoFn(api.generateVideo)
+    setSaveCanvasFn(api.saveCanvas)
     return () => {
       setGenerateImageFn(null)
       setApplyImageActionFn(null)
       setGenerateVideoFn(null)
+      setSaveCanvasFn(null)
     }
   }, [
     api.applyImageAction,
     api.generateImage,
     api.generateVideo,
+    api.saveCanvas,
     setApplyImageActionFn,
     setGenerateImageFn,
     setGenerateVideoFn,
+    setSaveCanvasFn,
   ])
 
   return (

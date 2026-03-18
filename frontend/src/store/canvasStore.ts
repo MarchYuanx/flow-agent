@@ -15,7 +15,7 @@ import {
   DagCycleError,
   hasDagCycle,
 } from '../utils/dagExecutor'
-import type { ImageAction } from '../hooks/useApi'
+import type { CanvasSaveRequest, GenerateImageRequest, ImageAction } from '../hooks/useApi'
 
 /**
  * 全局画布状态（Zustand 单一事实源）
@@ -188,9 +188,10 @@ type CanvasState = {
   rightPanelCollapsed: boolean
   nodeMenu: NodeMenuState
   chatMessages: ChatMessage[]
-  generateImageFn: ((prompt: string) => Promise<string>) | null
+  generateImageFn: ((req: GenerateImageRequest) => Promise<string>) | null
   applyImageActionFn: ((req: { imageUrl: string; action: ImageAction; prompt?: string }) => Promise<string>) | null
   generateVideoFn: ((req: { imageUrl: string; prompt?: string }) => Promise<string>) | null
+  saveCanvasFn: ((req: CanvasSaveRequest) => Promise<void>) | null
   setNodes: (nodes: CanvasNode[]) => void
   setEdges: (edges: Edge[]) => void
   onNodesChange: (changes: NodeChange<CanvasNode>[]) => void
@@ -214,16 +215,17 @@ type CanvasState = {
   closeNodeMenu: () => void
   appendChatMessage: (message: Omit<ChatMessage, 'id' | 'createdAt'>) => void
   deleteNode: (nodeId: string) => void
-  setGenerateImageFn: (fn: ((prompt: string) => Promise<string>) | null) => void
+  setGenerateImageFn: (fn: ((req: GenerateImageRequest) => Promise<string>) | null) => void
   setApplyImageActionFn: (
     fn: ((req: { imageUrl: string; action: ImageAction; prompt?: string }) => Promise<string>) | null,
   ) => void
   setGenerateVideoFn: (fn: ((req: { imageUrl: string; prompt?: string }) => Promise<string>) | null) => void
+  setSaveCanvasFn: (fn: ((req: CanvasSaveRequest) => Promise<void>) | null) => void
 
   addNode: (type: NodeType, position: { x: number; y: number }) => void
   updateNodeData: (nodeId: string, updater: (prev: CanvasNodeData) => CanvasNodeData) => void
 
-  run: (generateImage: (prompt: string) => Promise<string>) => Promise<void>
+  run: (generateImage: (req: GenerateImageRequest) => Promise<string>) => Promise<void>
   runNode: (nodeId: string) => Promise<void>
   runImageNodeAction: (params: { nodeId: string; action: ImageAction; prompt?: string }) => Promise<void>
 }
@@ -237,6 +239,39 @@ let nodeSeq = 1
  * 注意：必须在节点删除/任务结束时清理定时器，避免泄漏。
  */
 const progressTimers = new Map<string, number>()
+
+/** 画布保存防抖（毫秒） */
+const CANVAS_SAVE_DEBOUNCE_MS = 500
+/** 默认画布 id：后续可改为基于路由/会话的动态值 */
+const DEFAULT_CANVAS_ID = 'default'
+/** 当前防抖定时器 */
+let canvasSaveTimer: number | null = null
+
+function scheduleCanvasSave(storeGet: () => CanvasState, storeSet: (partial: Partial<CanvasState>) => void) {
+  if (canvasSaveTimer !== null) window.clearTimeout(canvasSaveTimer)
+  canvasSaveTimer = window.setTimeout(() => {
+    const saveFn = storeGet().saveCanvasFn
+    if (!saveFn) return
+
+    const { nodes, edges } = storeGet()
+    void saveFn({ canvasId: DEFAULT_CANVAS_ID, nodes, edges }).catch((e) => {
+      const message = e instanceof Error ? e.message : '保存画布失败：未知错误'
+      console.error('[Canvas][save] error', { message })
+      storeSet({ globalError: message })
+      // 同时写一条日志，便于左侧排查（不依赖 UI 展示）
+      try {
+        storeGet().appendLog({
+          level: 'error',
+          status: 'error',
+          scope: 'node',
+          message: `保存画布失败：${message}`,
+        })
+      } catch {
+        // no-op
+      }
+    })
+  }, CANVAS_SAVE_DEBOUNCE_MS)
+}
 
 /** localStorage：收藏夹持久化 key（版本化，便于未来迁移） */
 const FAVORITES_KEY = 'flow-canvas:favorites:v1'
@@ -451,36 +486,41 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   generateImageFn: null,
   applyImageActionFn: null,
   generateVideoFn: null,
+  saveCanvasFn: null,
 
   setNodes: (nodes) => set({ nodes }),
   setEdges: (edges) => set({ edges }),
 
-  onNodesChange: (changes) =>
-    set((state) => ({ nodes: applyNodeChanges(changes, state.nodes) })),
-  onEdgesChange: (changes) =>
-    set((state) => ({ edges: applyEdgeChanges(changes, state.edges) })),
-  onConnect: (connection) =>
-    set((state) => {
-      /**
-       * 连接规则（数据层兜底）：
-       * - video 节点只能作为“终止节点”：禁止从 video 往外连（UI 去掉 source handle，但这里仍做约束，避免被程序/未来 UI 绕过）
-       * - 其他节点：允许按 ReactFlow 默认策略新增边
-       */
-      const sourceNode = state.nodes.find((n) => n.id === connection.source)
-      if (sourceNode?.type === 'video') {
-        // 视频节点只能作为终止节点：禁止从 video 往外连
-        return state
-      }
+  onNodesChange: (changes) => {
+    const nextNodes = applyNodeChanges(changes, get().nodes)
+    set({ nodes: nextNodes })
+    scheduleCanvasSave(get, set)
+  },
+  onEdgesChange: (changes) => {
+    const nextEdges = applyEdgeChanges(changes, get().edges)
+    set({ edges: nextEdges })
+    scheduleCanvasSave(get, set)
+  },
+  onConnect: (connection) => {
+    /**
+     * 连接规则（数据层兜底）：
+     * - video 节点只能作为“终止节点”：禁止从 video 往外连（UI 去掉 source handle，但这里仍做约束，避免被程序/未来 UI 绕过）
+     * - 其他节点：允许按 ReactFlow 默认策略新增边
+     */
+    const state = get()
+    const sourceNode = state.nodes.find((n) => n.id === connection.source)
+    if (sourceNode?.type === 'video') return
 
-      const nextEdges = addEdge(connection, state.edges)
-      if (hasDagCycle(state.nodes, nextEdges)) {
-        // 与执行时的 DagCycleError 一致：给用户明确反馈，并且“不允许”该连线生效
-        const message = '检测到环（cycle），该连线会导致流程无法执行，请调整连线后再试。'
-        return { ...state, globalError: message }
-      }
+    const nextEdges = addEdge(connection, state.edges)
+    if (hasDagCycle(state.nodes, nextEdges)) {
+      const message = '检测到环（cycle），该连线会导致流程无法执行，请调整连线后再试。'
+      set({ globalError: message })
+      return
+    }
 
-      return { ...state, edges: nextEdges, globalError: null }
-    }),
+    set({ edges: nextEdges, globalError: null })
+    scheduleCanvasSave(get, set)
+  },
 
   setSelectedNodeId: (nodeId) => set({ selectedNodeId: nodeId }),
   appendLog: (entry) =>
@@ -577,7 +617,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         },
       ],
     })),
-  deleteNode: (nodeId) =>
+  deleteNode: (nodeId) => {
     set((state) => {
       stopAllProgressForNode(nodeId)
       const nodes = state.nodes.filter((n) => n.id !== nodeId)
@@ -588,10 +628,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         state.selectedNodeId === nodeId ? null : state.selectedNodeId
       const nodeMenu = state.nodeMenu?.nodeId === nodeId ? null : state.nodeMenu
       return { nodes, edges, selectedNodeId, nodeMenu }
-    }),
+    })
+    scheduleCanvasSave(get, set)
+  },
   setGenerateImageFn: (fn) => set({ generateImageFn: fn }),
   setApplyImageActionFn: (fn) => set({ applyImageActionFn: fn }),
   setGenerateVideoFn: (fn) => set({ generateVideoFn: fn }),
+  setSaveCanvasFn: (fn) => set({ saveCanvasFn: fn }),
 
   addNode: (type, position) => {
     const id = `${type}-${nodeSeq++}`
@@ -650,14 +693,18 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     })()
 
     set({ nodes: [...get().nodes, node] })
+    scheduleCanvasSave(get, set)
   },
 
   updateNodeData: (nodeId, updater) =>
-    set((state) => ({
-      nodes: state.nodes.map((n) =>
-        n.id === nodeId ? ({ ...n, data: updater(n.data) } as CanvasNode) : n,
-      ),
-    })),
+    (() => {
+      set((state) => ({
+        nodes: state.nodes.map((n) =>
+          n.id === nodeId ? ({ ...n, data: updater(n.data) } as CanvasNode) : n,
+        ),
+      }))
+      scheduleCanvasSave(get, set)
+    })(),
 
   run: async (generateImage) => {
     if (get().isRunning) return
@@ -790,6 +837,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         scope: 'dag',
         message: 'DAG 执行完成',
       })
+      // DAG 运行完成后持久化一次画布数据（防抖会合并频繁触发）
+      scheduleCanvasSave(get, set)
     } catch (e) {
       /**
        * 异常兜底：
@@ -840,6 +889,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           return n
         }),
       }))
+      scheduleCanvasSave(get, set)
     } finally {
       set({ isRunning: false })
     }
@@ -948,6 +998,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           return n
         }),
       }))
+      scheduleCanvasSave(get, set)
     } catch (e) {
       const message =
         e instanceof DagCycleError
@@ -981,6 +1032,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           } as CanvasNode
         }),
       }))
+      scheduleCanvasSave(get, set)
     }
   },
 
@@ -1069,8 +1121,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }))
 
     if (action === 'generate_video') {
-      const generateVideo = get().generateVideoFn
-      if (!generateVideo) {
+      const generateImage = get().generateImageFn
+      if (!generateImage) {
         set({ globalError: 'API 未就绪：请确认后端已启动' })
         return
       }
@@ -1105,10 +1157,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         // 多图：对每张图片都生成一个视频链接（模拟）
         const urls = sourceImages.length > 0 ? sourceImages : [activeUrl]
         const results = await Promise.all(
-          urls.map(async (u, idx) => ({
-            idx,
-            videoUrl: await generateVideo({ imageUrl: u, prompt }),
-          })),
+          urls.map(async (u, idx) => {
+            // 模拟“视频生成耗时”：5~10s
+            const fakeDurationMs = Math.floor(5000 + Math.random() * 5000)
+            const videoUrl = await generateImage({ aiType: action, imageUrl: u, prompt })
+            await new Promise<void>((r) => window.setTimeout(r, fakeDurationMs))
+            return { idx, videoUrl }
+          }),
         )
 
         // 生成结果节点（Video）：只能由任务生成，不在左侧 palette 暴露
@@ -1224,6 +1279,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
             } as CanvasNode
           }),
         }))
+        scheduleCanvasSave(get, set)
         for (const r of results) {
           get().appendChatMessage({
             role: 'user',
@@ -1275,12 +1331,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
             } as CanvasNode
           }),
         }))
+        scheduleCanvasSave(get, set)
       }
       return
     }
 
-    const applyAction = get().applyImageActionFn
-    if (!applyAction) {
+    const generateImage = get().generateImageFn
+    if (!generateImage) {
       set({ globalError: 'API 未就绪：请确认后端已启动' })
       return
     }
@@ -1360,12 +1417,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           selectedNodeId: targetId,
         }
       })
+      // 新增结果节点后：立即持久化一次（防抖会合并后续状态更新）
+      scheduleCanvasSave(get, set)
 
-      // 并发执行每张图：各自 1~5s 进度 + 最终回填到同一个结果节点的 images[idx]
+          // 并发执行每张图：各自 5~10s 进度 + 最终回填到同一个结果节点的 images[idx]
       const okFlags: boolean[] = urls.map(() => false)
       await Promise.all(
         urls.map(async (u, idx) => {
-          const fakeDurationMs = Math.floor(1000 + Math.random() * 4000)
+          const fakeDurationMs = Math.floor(5000 + Math.random() * 5000)
           const key = `${targetId}::${idx}`
 
           startProgress({
@@ -1394,7 +1453,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           })
 
           try {
-            const newUrl = await applyAction({ imageUrl: u, action, prompt })
+            const newUrl = await generateImage({ aiType: action, imageUrl: u, prompt })
             console.info('[AI][imageAction] success', {
               nodeId,
               nodeType: node.type,
@@ -1522,6 +1581,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           } as CanvasNode
         }),
       }))
+      scheduleCanvasSave(get, set)
     } catch (e) {
       const message = e instanceof Error ? e.message : '操作失败'
       console.error('[AI][imageAction] error', {
@@ -1558,6 +1618,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           } as CanvasNode
         }),
       }))
+      scheduleCanvasSave(get, set)
     }
   },
 }))

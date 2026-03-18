@@ -6,6 +6,7 @@ import type {
   TextInputData,
   VideoData,
 } from '../store/canvasStore'
+import type { GenerateImageRequest } from '../hooks/useApi'
 
 export type DagNodeId = string
 
@@ -95,7 +96,7 @@ async function executeTopo(params: {
   topo: string[]
   nodeById: Map<string, CanvasNode>
   incomingSources: Map<string, string[]>
-  generateImage: (prompt: string) => Promise<string>
+  generateImage: (req: GenerateImageRequest) => Promise<string>
   shouldExecute: (nodeId: string) => boolean
 }): Promise<DagTargetExecutionResult> {
   const { topo, nodeById, incomingSources, generateImage, shouldExecute } = params
@@ -146,7 +147,7 @@ async function executeTopo(params: {
       const prompt = (upstreamText ?? data.prompt).trim()
       const safePrompt = prompt.length > 0 ? prompt : 'EMPTY_PROMPT'
 
-      const url = await generateImage(safePrompt)
+      const url = await generateImage({ aiType: 'llm_generate', prompt: safePrompt })
       outputs.set(id, { kind: 'image', url })
       llmImagesByNodeId.set(id, url)
       continue
@@ -170,7 +171,7 @@ async function executeTopo(params: {
 export async function executeDag(params: {
   nodes: CanvasNode[]
   edges: Edge[]
-  generateImage: (prompt: string) => Promise<string>
+  generateImage: (req: GenerateImageRequest) => Promise<string>
 }): Promise<DagExecutionResult> {
   const { nodes, edges, generateImage } = params
 
@@ -270,7 +271,7 @@ export async function executeDagToTarget(params: {
   nodes: CanvasNode[]
   edges: Edge[]
   targetNodeId: string
-  generateImage: (prompt: string) => Promise<string>
+  generateImage: (req: GenerateImageRequest) => Promise<string>
 }): Promise<DagTargetExecutionResult> {
   const { nodes, edges, targetNodeId, generateImage } = params
   const { topo, incomingSources, nodeById } = topoSort({ nodes, edges })

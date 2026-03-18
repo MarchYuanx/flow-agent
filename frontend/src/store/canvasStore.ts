@@ -15,7 +15,14 @@ import {
   DagCycleError,
   hasDagCycle,
 } from '../utils/dagExecutor'
-import type { CanvasSaveRequest, GenerateImageRequest, ImageAction } from '../hooks/useApi'
+import type {
+  AiTaskStartRequest,
+  AiTaskStatusResponse,
+  CanvasSaveRequest,
+  GenerateImageRequest,
+  ImageAction,
+} from '../hooks/useApi'
+import { pollAiTask } from '../utils/pollAiTask'
 
 /**
  * 全局画布状态（Zustand 单一事实源）
@@ -191,6 +198,8 @@ type CanvasState = {
   generateImageFn: ((req: GenerateImageRequest) => Promise<string>) | null
   applyImageActionFn: ((req: { imageUrl: string; action: ImageAction; prompt?: string }) => Promise<string>) | null
   generateVideoFn: ((req: { imageUrl: string; prompt?: string }) => Promise<string>) | null
+  startAiTaskFn: ((req: AiTaskStartRequest) => Promise<{ taskId: string }>) | null
+  getAiTaskStatusFn: ((taskId: string) => Promise<AiTaskStatusResponse>) | null
   saveCanvasFn: ((req: CanvasSaveRequest) => Promise<void>) | null
   setNodes: (nodes: CanvasNode[]) => void
   setEdges: (edges: Edge[]) => void
@@ -220,6 +229,8 @@ type CanvasState = {
     fn: ((req: { imageUrl: string; action: ImageAction; prompt?: string }) => Promise<string>) | null,
   ) => void
   setGenerateVideoFn: (fn: ((req: { imageUrl: string; prompt?: string }) => Promise<string>) | null) => void
+  setStartAiTaskFn: (fn: ((req: AiTaskStartRequest) => Promise<{ taskId: string }>) | null) => void
+  setGetAiTaskStatusFn: (fn: ((taskId: string) => Promise<AiTaskStatusResponse>) | null) => void
   setSaveCanvasFn: (fn: ((req: CanvasSaveRequest) => Promise<void>) | null) => void
 
   addNode: (type: NodeType, position: { x: number; y: number }) => void
@@ -239,6 +250,57 @@ let nodeSeq = 1
  * 注意：必须在节点删除/任务结束时清理定时器，避免泄漏。
  */
 const progressTimers = new Map<string, number>()
+
+/**
+ * 全画布共享的 AI 并发控制：限制同时“启动运行”任务的数量。
+ *
+ * 设计原因：
+ * - 图片操作 / 视频生成 / llm_generate 都可能触发后端耗时任务
+ * - 若不限制，短时间内可能同时启动过多任务导致体验与后端资源压力变差
+ */
+const MAX_AI_CONCURRENCY = 6
+type ReleaseFn = () => void
+function createSemaphore(max: number) {
+  let current = 0
+  const waiters: Array<(release: ReleaseFn) => void> = []
+
+  const dispatch = () => {
+    if (current >= max) return
+    const next = waiters.shift()
+    if (!next) return
+    current += 1
+
+    let released = false
+    const release: ReleaseFn = () => {
+      if (released) return
+      released = true
+      current -= 1
+      dispatch()
+    }
+    next(release)
+  }
+
+  return {
+    acquire: async (): Promise<ReleaseFn> =>
+      new Promise<ReleaseFn>((resolve) => {
+        if (current < max) {
+          current += 1
+          let released = false
+          const release: ReleaseFn = () => {
+            if (released) return
+            released = true
+            current -= 1
+            dispatch()
+          }
+          resolve(release)
+          return
+        }
+        waiters.push(resolve)
+      }),
+  }
+}
+
+const aiConcurrencyLimiter = createSemaphore(MAX_AI_CONCURRENCY)
 
 /** 画布保存防抖（毫秒） */
 const CANVAS_SAVE_DEBOUNCE_MS = 500
@@ -362,30 +424,6 @@ function stopProgress(key: string) {
   }
 }
 
-function startProgress(params: {
-  key: string
-  durationMs: number
-  setProgress: (value: number) => void
-}) {
-  const { key, durationMs, setProgress } = params
-  stopProgress(key)
-
-  const startedAt = Date.now()
-  const tickMs = 120
-  const timer = window.setInterval(() => {
-    const elapsed = Date.now() - startedAt
-    const t = Math.min(1, elapsed / durationMs)
-    // 进度先到 92%，留给“完成瞬间”跳到 100%
-    const eased = 1 - Math.pow(1 - t, 2)
-    const next = Math.min(92, Math.max(1, Math.round(eased * 92)))
-    setProgress(next)
-    if (t >= 1) {
-      stopProgress(key)
-    }
-  }, tickMs)
-  progressTimers.set(key, timer)
-}
-
 function stopAllProgressForNode(nodeId: string) {
   const prefix = `${nodeId}::`
   for (const key of progressTimers.keys()) {
@@ -486,6 +524,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   generateImageFn: null,
   applyImageActionFn: null,
   generateVideoFn: null,
+  startAiTaskFn: null,
+  getAiTaskStatusFn: null,
   saveCanvasFn: null,
 
   setNodes: (nodes) => set({ nodes }),
@@ -634,6 +674,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   setGenerateImageFn: (fn) => set({ generateImageFn: fn }),
   setApplyImageActionFn: (fn) => set({ applyImageActionFn: fn }),
   setGenerateVideoFn: (fn) => set({ generateVideoFn: fn }),
+  setStartAiTaskFn: (fn) => set({ startAiTaskFn: fn }),
+  setGetAiTaskStatusFn: (fn) => set({ getAiTaskStatusFn: fn }),
   setSaveCanvasFn: (fn) => set({ saveCanvasFn: fn }),
 
   addNode: (type, position) => {
@@ -706,7 +748,24 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       scheduleCanvasSave(get, set)
     })(),
 
-  run: async (generateImage) => {
+  run: async (_generateImage) => {
+    /**
+     * start+poll 执行图片操作（局部重绘/抠图/去背景/微调等）
+     *
+     * - 结果节点会先创建占位：`image-*`，并预置 `aiTask.items`（每张图一个 item）
+     * - 针对每张选中源图启动后端任务（`kind=image_action`）
+     * - 轮询中实时回填：
+     *   - `resultNode.aiTask.items[idx]`：progress/status/errorMessage
+     *   - `resultNode.images[idx]`：成功后立即写入 resultUrl
+     * - 轮询失败/超时：回填 error，并在全部完成后按成功率把 result 节点置为 success/error
+     */
+    const startAiTask = get().startAiTaskFn
+    const getAiTaskStatus = get().getAiTaskStatusFn
+    if (!startAiTask || !getAiTaskStatus) {
+      set({ globalError: 'API 未就绪：请确认后端已启动' })
+      return
+    }
+
     if (get().isRunning) return
 
     /**
@@ -780,7 +839,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       const { llmImagesByNodeId } = await executeDag({
         nodes: get().nodes,
         edges: get().edges,
-        generateImage,
+        startAiTask,
+        getAiTaskStatus,
       })
 
       /**
@@ -896,8 +956,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   runNode: async (nodeId) => {
-    const generateImage = get().generateImageFn
-    if (!generateImage) {
+    const startAiTask = get().startAiTaskFn
+    const getAiTaskStatus = get().getAiTaskStatusFn
+    if (!startAiTask || !getAiTaskStatus) {
       set({ globalError: 'API 未就绪：请确认后端已启动' })
       return
     }
@@ -925,7 +986,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
      * - 目标：只执行“到 nodeId 为止”的上游依赖子图（不会执行与其无关的分支）
      * - UI：只把目标节点置为 running（上游节点不强制改状态，避免 UI 抖动）
      * - 执行：`executeDagToTarget` 负责提取子图 + 拓扑执行
-     * - 回填：仅回填目标 llm_generate 的结果（resultImageUrl / errorMessage）
+     * - 回填：
+     *   - llm_generate 的具体生成：由 `dagExecutor` 内部 start+poll 完成并返回最终 `resultUrl`
+     *   - store：把返回的 URL 写入目标节点 `resultImageUrl`，失败则写入 `errorMessage`
      */
     set((state) => ({
       nodes: state.nodes.map((n) => {
@@ -948,7 +1011,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         nodes: get().nodes,
         edges: get().edges,
         targetNodeId: nodeId,
-        generateImage,
+        startAiTask,
+        getAiTaskStatus,
       })
 
       const url = result.llmImagesByNodeId.get(nodeId)
@@ -1121,13 +1185,25 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }))
 
     if (action === 'generate_video') {
-      const generateImage = get().generateImageFn
-      if (!generateImage) {
+      /**
+       * start+poll 生成视频（多图并发）
+       *
+       * - 每张选中源图启动一个后端任务：`kind=video_generate`
+       * - 前端轮询对应 task 的 `status/progress/resultUrl`
+       * - 实时回填源 `image` 节点的 `aiTask.items[idx]` 进度/错误
+       * - 全部完成后创建 `video-*` 结果节点，并塞入最终 `videos` 列表
+       */
+      const startAiTask = get().startAiTaskFn
+      const getAiTaskStatus = get().getAiTaskStatusFn
+      if (!startAiTask || !getAiTaskStatus) {
         set({ globalError: 'API 未就绪：请确认后端已启动' })
         return
       }
 
       const taskId = `aitask_${crypto.randomUUID()}`
+      const urls = sourceImages.length > 0 ? sourceImages : [activeUrl]
+      const now = Date.now()
+      const items = urls.map((_, idx) => ({ index: idx, status: 'running' as const, progress: 1 }))
       set((state) => ({
         nodes: state.nodes.map((n) => {
           if (n.id !== nodeId) return n
@@ -1144,9 +1220,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
                 action,
                 prompt,
                 status: 'running',
-                progress: 1,
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
+                progress: calcOverallProgress(items, 1),
+                items,
+                createdAt: now,
+                updatedAt: now,
               },
             },
           } as CanvasNode
@@ -1154,15 +1231,84 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }))
 
       try {
-        // 多图：对每张图片都生成一个视频链接（模拟）
-        const urls = sourceImages.length > 0 ? sourceImages : [activeUrl]
+        // 多图：对每张图片都生成一个视频链接
         const results = await Promise.all(
           urls.map(async (u, idx) => {
-            // 模拟“视频生成耗时”：5~10s
-            const fakeDurationMs = Math.floor(5000 + Math.random() * 5000)
-            const videoUrl = await generateImage({ aiType: action, imageUrl: u, prompt })
-            await new Promise<void>((r) => window.setTimeout(r, fakeDurationMs))
-            return { idx, videoUrl }
+            // 全画布共享并发限制：最多 MAX_AI_CONCURRENCY 个真实后端任务并发运行
+            const release = await aiConcurrencyLimiter.acquire()
+            try {
+              const { taskId: subTaskId } = await startAiTask({
+                kind: 'video_generate',
+                imageUrl: u,
+                prompt,
+              })
+
+              const pollRes = await pollAiTask({
+                taskId: subTaskId,
+                intervalMs: 1000,
+                timeoutMs: 30_000,
+                getAiTaskStatus,
+                shouldContinue: () => get().nodes.some((nn) => nn.id === nodeId),
+                onUpdate: (st) => {
+                  set((state) => ({
+                    nodes: state.nodes.map((n) => {
+                      if (n.id !== nodeId) return n
+                      const d = n.data as ImageData
+                      const nextItems = (d.aiTask?.items ?? items).slice()
+                      const cur = nextItems[idx]
+                      if (cur) {
+                        if (st.status === 'running') {
+                          nextItems[idx] = { ...cur, status: 'running', progress: st.progress }
+                          nextItems[idx].errorMessage = undefined
+                        } else if (st.status === 'success') {
+                          nextItems[idx] = { ...cur, status: 'success', progress: 100, errorMessage: undefined }
+                        } else {
+                          nextItems[idx] = {
+                            ...cur,
+                            status: 'error',
+                            progress: 100,
+                            errorMessage: st.errorMessage ?? '任务失败',
+                          }
+                        }
+                      }
+
+                      const overallStatus =
+                        nextItems.some((it) => it.status === 'error')
+                          ? 'error'
+                          : nextItems.every((it) => it.status === 'success')
+                            ? 'success'
+                            : 'running'
+
+                      const overallProgress = calcOverallProgress(nextItems, st.progress)
+
+                      return {
+                        ...n,
+                        data: {
+                          ...d,
+                          status: overallStatus,
+                          errorMessage: overallStatus === 'error' ? st.errorMessage ?? '任务失败' : undefined,
+                          lastAction: action,
+                          aiTask: d.aiTask
+                            ? {
+                                ...d.aiTask,
+                                status: overallStatus,
+                                progress: overallProgress,
+                                items: nextItems,
+                                updatedAt: Date.now(),
+                              }
+                            : d.aiTask,
+                        },
+                      } as CanvasNode
+                    }),
+                  }))
+                },
+              })
+
+              if (!pollRes.resultUrl) throw new Error('视频 URL 为空')
+              return { idx, videoUrl: pollRes.resultUrl }
+            } finally {
+              release()
+            }
           }),
         )
 
@@ -1336,8 +1482,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       return
     }
 
-    const generateImage = get().generateImageFn
-    if (!generateImage) {
+    const startAiTask = get().startAiTaskFn
+    const getAiTaskStatus = get().getAiTaskStatusFn
+    if (!startAiTask || !getAiTaskStatus) {
       set({ globalError: 'API 未就绪：请确认后端已启动' })
       return
     }
@@ -1420,51 +1567,82 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       // 新增结果节点后：立即持久化一次（防抖会合并后续状态更新）
       scheduleCanvasSave(get, set)
 
-          // 并发执行每张图：各自 5~10s 进度 + 最终回填到同一个结果节点的 images[idx]
+          // 多图：对每张图片启动“后端任务（start）+轮询（poll）”，并将结果逐步回填到同一个结果节点的 images[idx]
       const okFlags: boolean[] = urls.map(() => false)
       await Promise.all(
         urls.map(async (u, idx) => {
-          const fakeDurationMs = Math.floor(5000 + Math.random() * 5000)
-          const key = `${targetId}::${idx}`
-
-          startProgress({
-            key,
-            durationMs: fakeDurationMs,
-            setProgress: (value) => {
-              set((state) => ({
-                nodes: state.nodes.map((n) => {
-                  if (n.id !== targetId || n.type !== 'image') return n
-                  const d = n.data as ImageData
-                  const items = (d.aiTask?.items ?? []).slice()
-                  if (items[idx]) items[idx] = { ...items[idx], progress: value, status: 'running' }
-                  const overall = calcOverallProgress(items, value)
-                  return {
-                    ...n,
-                    data: {
-                      ...d,
-                      aiTask: d.aiTask
-                        ? { ...d.aiTask, status: 'running', items, progress: overall, updatedAt: Date.now() }
-                        : d.aiTask,
-                    },
-                  } as CanvasNode
-                }),
-              }))
-            },
-          })
-
+          const release = await aiConcurrencyLimiter.acquire()
           try {
-            const newUrl = await generateImage({ aiType: action, imageUrl: u, prompt })
-            console.info('[AI][imageAction] success', {
-              nodeId,
-              nodeType: node.type,
+            const { taskId: subTaskId } = await startAiTask({
+              kind: 'image_action',
+              imageUrl: u,
               action,
-              imageIndex: idx,
-              imageUrl: newUrl,
+              prompt,
             })
 
-            await new Promise<void>((r) => window.setTimeout(r, fakeDurationMs))
-            stopProgress(key)
+            const pollRes = await pollAiTask({
+              taskId: subTaskId,
+              intervalMs: 1000,
+              timeoutMs: 30_000,
+              getAiTaskStatus,
+              shouldContinue: () => get().nodes.some((n) => n.id === targetId),
+              onUpdate: (st) => {
+                set((state) => ({
+                  nodes: state.nodes.map((n) => {
+                    if (n.id !== targetId || n.type !== 'image') return n
+                    const d = n.data as ImageData
+                    const images = d.images.slice()
+                    const items = (d.aiTask?.items ?? []).slice()
+                    if (!items[idx]) return n
+
+                    if (st.status === 'running') {
+                      items[idx] = { ...items[idx], status: 'running', progress: st.progress, errorMessage: undefined }
+                    } else if (st.status === 'success') {
+                      if (st.resultUrl) images[idx] = st.resultUrl
+                      items[idx] = { ...items[idx], status: 'success', progress: 100, errorMessage: undefined }
+                    } else {
+                      items[idx] = {
+                        ...items[idx],
+                        status: 'error',
+                        progress: 100,
+                        errorMessage: st.errorMessage ?? '任务失败',
+                      }
+                    }
+
+                    const overallStatus =
+                      items.some((it) => it.status === 'error')
+                        ? 'error'
+                        : items.every((it) => it.status === 'success')
+                          ? 'success'
+                          : 'running'
+
+                    const overallProgress = calcOverallProgress(items, st.progress)
+
+                    return {
+                      ...n,
+                      data: {
+                        ...d,
+                        images,
+                        status: overallStatus,
+                        errorMessage: overallStatus === 'error' ? items[idx]?.errorMessage : undefined,
+                        aiTask: d.aiTask
+                          ? {
+                              ...d.aiTask,
+                              status: overallStatus,
+                              progress: overallProgress,
+                              items,
+                              updatedAt: Date.now(),
+                            }
+                          : d.aiTask,
+                      },
+                    } as CanvasNode
+                  }),
+                }))
+              },
+            })
+
             okFlags[idx] = true
+            const newUrl = pollRes.resultUrl ?? ''
 
             get().appendLog({
               level: 'success',
@@ -1477,30 +1655,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
               result: { targetNodeId: targetId, imageIndex: idx },
             })
 
-            set((state) => ({
-              nodes: state.nodes.map((n) => {
-                if (n.id !== targetId || n.type !== 'image') return n
-                const d = n.data as ImageData
-                const images = d.images.slice()
-                images[idx] = newUrl
-                const items = (d.aiTask?.items ?? []).slice()
-                if (items[idx]) items[idx] = { ...items[idx], progress: 100, status: 'success', errorMessage: undefined }
-                const overall = calcOverallProgress(items, 100)
-                return {
-                  ...n,
-                  data: {
-                    ...d,
-                    images,
-                    aiTask: d.aiTask
-                      ? { ...d.aiTask, status: 'running', items, progress: overall, updatedAt: Date.now() }
-                      : d.aiTask,
-                  },
-                } as CanvasNode
-              }),
-            }))
-
-            get().appendChatMessage({ role: 'user', kind: 'image', imageUrl: newUrl })
+            if (newUrl) get().appendChatMessage({ role: 'user', kind: 'image', imageUrl: newUrl })
           } catch (e) {
+            okFlags[idx] = false
             const message = e instanceof Error ? e.message : '操作失败'
             console.error('[AI][imageAction] error', {
               nodeId,
@@ -1509,7 +1666,46 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
               imageIndex: idx,
               message,
             })
-            stopProgress(key)
+
+            // pollAiTask 内部已尽可能写入 items 状态；这里再补一次，保证 UI 不会“卡在 running”
+            set((state) => ({
+              nodes: state.nodes.map((n) => {
+                if (n.id !== targetId || n.type !== 'image') return n
+                const d = n.data as ImageData
+                const images = d.images.slice()
+                const items = (d.aiTask?.items ?? []).slice()
+                if (items[idx]) items[idx] = { ...items[idx], progress: 100, status: 'error', errorMessage: message }
+
+                const overallStatus =
+                  items.some((it) => it.status === 'error')
+                    ? 'error'
+                    : items.every((it) => it.status === 'success')
+                      ? 'success'
+                      : 'running'
+
+                const overallProgress = calcOverallProgress(items, 100)
+
+                return {
+                  ...n,
+                  data: {
+                    ...d,
+                    images,
+                    status: overallStatus,
+                    errorMessage: overallStatus === 'error' ? message : undefined,
+                    aiTask: d.aiTask
+                      ? {
+                          ...d.aiTask,
+                          status: overallStatus,
+                          progress: overallProgress,
+                          items,
+                          updatedAt: Date.now(),
+                        }
+                      : d.aiTask,
+                  },
+                } as CanvasNode
+              }),
+            }))
+
             get().appendLog({
               level: 'error',
               status: 'error',
@@ -1520,25 +1716,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
               message: `${imageActionToLabel(action)}失败 #${idx + 1}：${message}`,
               result: { targetNodeId: targetId, imageIndex: idx },
             })
-
-            set((state) => ({
-              nodes: state.nodes.map((n) => {
-                if (n.id !== targetId || n.type !== 'image') return n
-                const d = n.data as ImageData
-                const items = (d.aiTask?.items ?? []).slice()
-                if (items[idx]) items[idx] = { ...items[idx], progress: 100, status: 'error', errorMessage: message }
-                const overall = calcOverallProgress(items, 100)
-                return {
-                  ...n,
-                  data: {
-                    ...d,
-                    aiTask: d.aiTask
-                      ? { ...d.aiTask, status: 'running', items, progress: overall, updatedAt: Date.now() }
-                      : d.aiTask,
-                  },
-                } as CanvasNode
-              }),
-            }))
+          } finally {
+            release()
           }
         }),
       )

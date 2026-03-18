@@ -6,7 +6,8 @@ import type {
   TextInputData,
   VideoData,
 } from '../store/canvasStore'
-import type { GenerateImageRequest } from '../hooks/useApi'
+import type { AiTaskStartRequest, AiTaskStatusResponse } from '../hooks/useApi'
+import { pollAiTask } from './pollAiTask'
 
 export type DagNodeId = string
 
@@ -96,10 +97,11 @@ async function executeTopo(params: {
   topo: string[]
   nodeById: Map<string, CanvasNode>
   incomingSources: Map<string, string[]>
-  generateImage: (req: GenerateImageRequest) => Promise<string>
+  startAiTask: (req: AiTaskStartRequest) => Promise<{ taskId: string }>
+  getAiTaskStatus: (taskId: string) => Promise<AiTaskStatusResponse>
   shouldExecute: (nodeId: string) => boolean
 }): Promise<DagTargetExecutionResult> {
-  const { topo, nodeById, incomingSources, generateImage, shouldExecute } = params
+  const { topo, nodeById, incomingSources, startAiTask, getAiTaskStatus, shouldExecute } = params
 
   const outputs = new Map<string, NodeOutput>()
   const llmImagesByNodeId = new Map<string, string>()
@@ -147,7 +149,25 @@ async function executeTopo(params: {
       const prompt = (upstreamText ?? data.prompt).trim()
       const safePrompt = prompt.length > 0 ? prompt : 'EMPTY_PROMPT'
 
-      const url = await generateImage({ aiType: 'llm_generate', prompt: safePrompt })
+      /**
+       * llm_generate：统一改为“后端任务 start + 前端轮询 poll”
+       *
+       * - 先调用 `startAiTask({ kind: 'llm_generate', prompt })` 拿到 `taskId`
+       * - 再轮询 `/api/ai/task/status/:taskId`，拿到最终 `resultUrl`
+       * - 超时/失败会直接抛错；store/canvasStore 捕获后把节点置为 error
+       */
+      const { taskId } = await startAiTask({ kind: 'llm_generate', prompt: safePrompt })
+      const result = await pollAiTask({
+        taskId,
+        intervalMs: 1000,
+        timeoutMs: 30_000,
+        getAiTaskStatus,
+        // DAG 执行器当前只负责“到达执行阶段”的节点；取消逻辑由 store 在 UI 操作层处理
+        shouldContinue: () => true,
+      })
+
+      const url = result.resultUrl
+      if (!url) throw new Error('未返回 llm_generate 的 resultUrl')
       outputs.set(id, { kind: 'image', url })
       llmImagesByNodeId.set(id, url)
       continue
@@ -171,16 +191,18 @@ async function executeTopo(params: {
 export async function executeDag(params: {
   nodes: CanvasNode[]
   edges: Edge[]
-  generateImage: (req: GenerateImageRequest) => Promise<string>
+  startAiTask: (req: AiTaskStartRequest) => Promise<{ taskId: string }>
+  getAiTaskStatus: (taskId: string) => Promise<AiTaskStatusResponse>
 }): Promise<DagExecutionResult> {
-  const { nodes, edges, generateImage } = params
+  const { nodes, edges, startAiTask, getAiTaskStatus } = params
 
   const { topo, incomingSources, nodeById } = topoSort({ nodes, edges })
   const result = await executeTopo({
     topo,
     incomingSources,
     nodeById,
-    generateImage,
+    startAiTask,
+    getAiTaskStatus,
     shouldExecute: () => true,
   })
   return { llmImagesByNodeId: result.llmImagesByNodeId }
@@ -271,9 +293,10 @@ export async function executeDagToTarget(params: {
   nodes: CanvasNode[]
   edges: Edge[]
   targetNodeId: string
-  generateImage: (req: GenerateImageRequest) => Promise<string>
+  startAiTask: (req: AiTaskStartRequest) => Promise<{ taskId: string }>
+  getAiTaskStatus: (taskId: string) => Promise<AiTaskStatusResponse>
 }): Promise<DagTargetExecutionResult> {
-  const { nodes, edges, targetNodeId, generateImage } = params
+  const { nodes, edges, targetNodeId, startAiTask, getAiTaskStatus } = params
   const { topo, incomingSources, nodeById } = topoSort({ nodes, edges })
 
   if (!nodeById.has(targetNodeId)) {
@@ -295,7 +318,8 @@ export async function executeDagToTarget(params: {
     topo,
     incomingSources,
     nodeById,
-    generateImage,
+    startAiTask,
+    getAiTaskStatus,
     shouldExecute: (id) => need.has(id),
   })
 }

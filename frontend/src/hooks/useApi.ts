@@ -49,6 +49,35 @@ export type CanvasSaveRequest = {
   edges: unknown[]
 }
 
+export type AiTaskKind = 'llm_generate' | 'image_action' | 'video_generate'
+export type AiTaskStatus = 'running' | 'success' | 'error'
+
+export type AiTaskStartRequest =
+  | {
+      kind: 'llm_generate'
+      prompt: string
+    }
+  | {
+      kind: 'image_action'
+      imageUrl: string
+      action: ImageAction
+      mask?: string
+      prompt?: string
+    }
+  | {
+      kind: 'video_generate'
+      imageUrl: string
+      prompt?: string
+    }
+
+export type AiTaskStatusResponse = {
+  taskId: string
+  status: AiTaskStatus
+  progress: number
+  resultUrl?: string
+  errorMessage?: string
+}
+
 function getApiBaseUrl(): string {
   const raw = import.meta.env.VITE_API_BASE_URL as string | undefined
   return raw && raw.trim().length > 0 ? raw.trim() : 'http://localhost:3001'
@@ -238,6 +267,72 @@ export function useApi() {
     [baseUrl],
   )
 
-  return { baseUrl, loading, error, generateImage, applyImageAction, generateVideo, saveCanvas }
+  const startAiTask = useCallback(
+    async (req: AiTaskStartRequest): Promise<{ taskId: string }> => {
+      setLoading(true)
+      setError(null)
+      try {
+        const res = await fetch(`${baseUrl}/api/ai/task/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(req satisfies AiTaskStartRequest),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data: unknown = await res.json()
+        if (!data || typeof data !== 'object' || !('taskId' in data)) {
+          throw new Error('响应格式不正确')
+        }
+        const taskId = (data as { taskId?: unknown }).taskId
+        if (typeof taskId !== 'string' || taskId.length === 0) throw new Error('未返回 taskId')
+        return { taskId }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : '未知错误'
+        setError(message)
+        throw e
+      } finally {
+        setLoading(false)
+      }
+    },
+    [baseUrl],
+  )
+
+  const getAiTaskStatus = useCallback(
+    async (taskId: string): Promise<AiTaskStatusResponse> => {
+      const res = await fetch(`${baseUrl}/api/ai/task/status/${encodeURIComponent(taskId)}`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+
+      const data: unknown = await res.json()
+      if (!data || typeof data !== 'object') throw new Error('响应格式不正确')
+
+      const task = data as Partial<AiTaskStatusResponse>
+      if (typeof task.taskId !== 'string') throw new Error('响应格式不正确（taskId）')
+      if (typeof task.status !== 'string') throw new Error('响应格式不正确（status）')
+      if (typeof task.progress !== 'number') throw new Error('响应格式不正确（progress）')
+
+      return {
+        taskId: task.taskId,
+        status: task.status as AiTaskStatus,
+        progress: task.progress,
+        resultUrl: task.resultUrl,
+        errorMessage: task.errorMessage,
+      }
+    },
+    [baseUrl],
+  )
+
+  return {
+    baseUrl,
+    loading,
+    error,
+    generateImage,
+    applyImageAction,
+    generateVideo,
+    saveCanvas,
+    startAiTask,
+    getAiTaskStatus,
+  }
 }
 

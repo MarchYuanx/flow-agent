@@ -57,10 +57,9 @@ export class AppService {
   /**
    * 仅模拟“生成视频”：返回一个可识别的 videoUrl（本质还是 URL 参数拼接）
    */
-  generateVideo(params: {
-    imageUrl: string;
-    prompt?: string;
-  }): { videoUrl: string } {
+  generateVideo(params: { imageUrl: string; prompt?: string }): {
+    videoUrl: string;
+  } {
     const runId = randomUUID().slice(0, 8);
     const safePrompt = (params.prompt ?? '').trim();
 

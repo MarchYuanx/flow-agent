@@ -59,7 +59,9 @@ export class AppController {
   }
 
   @Post('video/generate')
-  videoGenerate(@Body() body: VideoGenerateRequestDto): VideoGenerateResponseDto {
+  videoGenerate(
+    @Body() body: VideoGenerateRequestDto,
+  ): VideoGenerateResponseDto {
     const imageUrl = (body?.imageUrl ?? '').trim();
     const prompt = body?.prompt;
     const safeImageUrl = imageUrl.length > 0 ? imageUrl : 'EMPTY_IMAGE_URL';

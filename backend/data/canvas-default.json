@@ -4,35 +4,28 @@
       "id": "image-1",
       "type": "image",
       "position": {
-        "x": -511.67487684729065,
-        "y": -91.32019704433498
+        "x": -629.6748768472906,
+        "y": -301.320197044335
       },
       "data": {
         "title": "Image",
         "images": [
-          "https://picsum.photos/seed/f924c307/960/540?watermark=AI画布-mock&prompt=mock",
-          "https://picsum.photos/seed/e38af0e5/960/540?watermark=AI画布-mock&prompt=mock",
-          "https://picsum.photos/seed/fcff4ecd/960/540?watermark=AI画布-mock&prompt=mock",
-          "https://picsum.photos/seed/13c455ab/960/540?watermark=AI画布-mock&prompt=mock"
+          "https://picsum.photos/seed/fce35ca1/960/540?watermark=AI画布-mock&prompt=mock",
+          "https://picsum.photos/seed/e2f702f9/960/540?watermark=AI画布-mock&prompt=mock",
+          "https://picsum.photos/seed/ef62db38/960/540?watermark=AI画布-mock&prompt=mock"
         ],
-        "activeIndex": 3,
+        "activeIndex": 2,
         "selectedIndexes": [
-          0,
-          1,
-          2,
-          3
+          2
         ],
         "status": "success",
         "sourceNodeId": "image-1",
         "sourceImages": [
-          "https://picsum.photos/seed/f924c307/960/540?watermark=AI画布-mock&prompt=mock",
-          "https://picsum.photos/seed/e38af0e5/960/540?watermark=AI画布-mock&prompt=mock",
-          "https://picsum.photos/seed/fcff4ecd/960/540?watermark=AI画布-mock&prompt=mock",
-          "https://picsum.photos/seed/13c455ab/960/540?watermark=AI画布-mock&prompt=mock"
+          "https://picsum.photos/seed/ef62db38/960/540?watermark=AI画布-mock&prompt=mock"
         ],
-        "sourceAction": "repaint_text",
-        "sourcePrompt": "超清",
-        "lastAction": "repaint_text"
+        "sourceAction": "repaint_local",
+        "sourceMask": "mask_9423e6361c0f",
+        "lastAction": "repaint_local"
       },
       "measured": {
         "width": 480,
@@ -45,31 +38,25 @@
       "id": "image-2",
       "type": "image",
       "position": {
-        "x": 162.32512315270935,
-        "y": -81.32019704433498
+        "x": 436.32512315270935,
+        "y": 598.6798029556651
       },
       "data": {
         "title": "Image (Result)",
         "images": [
-          "https://picsum.photos/seed/erase--f66fb9ff/960/540?watermark=AI%E7%94%BB%E5%B8%83-f66fb9ff&action=erase&prompt=&source=https%3A%2F%2Fpicsum.photos%2Fseed%2Ff924c307%2F960%2F540%3Fwatermark%3DAI%E7%94%BB%E5%B8%83-mock%26prompt%3Dmock",
-          "https://picsum.photos/seed/erase--7114b637/960/540?watermark=AI%E7%94%BB%E5%B8%83-7114b637&action=erase&prompt=&source=https%3A%2F%2Fpicsum.photos%2Fseed%2Fe38af0e5%2F960%2F540%3Fwatermark%3DAI%E7%94%BB%E5%B8%83-mock%26prompt%3Dmock",
-          "https://picsum.photos/seed/erase--906ef503/960/540?watermark=AI%E7%94%BB%E5%B8%83-906ef503&action=erase&prompt=&source=https%3A%2F%2Fpicsum.photos%2Fseed%2Ffcff4ecd%2F960%2F540%3Fwatermark%3DAI%E7%94%BB%E5%B8%83-mock%26prompt%3Dmock",
-          "https://picsum.photos/seed/erase--9439b178/960/540?watermark=AI%E7%94%BB%E5%B8%83-9439b178&action=erase&prompt=&source=https%3A%2F%2Fpicsum.photos%2Fseed%2F13c455ab%2F960%2F540%3Fwatermark%3DAI%E7%94%BB%E5%B8%83-mock%26prompt%3Dmock"
+          "https://picsum.photos/seed/repaint_local--5519e4e3/960/540?watermark=AI%E7%94%BB%E5%B8%83-5519e4e3&action=repaint_local&prompt=&source=https%3A%2F%2Fpicsum.photos%2Fseed%2Ffce35ca1%2F960%2F540%3Fwatermark%3DAI%E7%94%BB%E5%B8%83-mock%26prompt%3Dmock&mask=a82d5e33"
         ],
         "activeIndex": 0,
         "status": "success",
-        "lastAction": "erase",
+        "lastAction": "repaint_local",
         "sourceNodeId": "image-1",
         "sourceImages": [
-          "https://picsum.photos/seed/f924c307/960/540?watermark=AI画布-mock&prompt=mock",
-          "https://picsum.photos/seed/e38af0e5/960/540?watermark=AI画布-mock&prompt=mock",
-          "https://picsum.photos/seed/fcff4ecd/960/540?watermark=AI画布-mock&prompt=mock",
-          "https://picsum.photos/seed/13c455ab/960/540?watermark=AI画布-mock&prompt=mock"
+          "https://picsum.photos/seed/fce35ca1/960/540?watermark=AI画布-mock&prompt=mock"
         ],
-        "sourceAction": "erase",
+        "sourceAction": "repaint_local",
         "aiTask": {
-          "id": "aitask_af3d67a4-b164-4ab6-8902-e41128fd4280",
-          "action": "erase",
+          "id": "aitask_bc0d0566-4512-4eaa-b8f4-d86271d1020a",
+          "action": "repaint_local",
           "status": "success",
           "progress": 100,
           "items": [
@@ -77,65 +64,40 @@
               "index": 0,
               "status": "success",
               "progress": 100
-            },
-            {
-              "index": 1,
-              "status": "success",
-              "progress": 100
-            },
-            {
-              "index": 2,
-              "status": "success",
-              "progress": 100
-            },
-            {
-              "index": 3,
-              "status": "success",
-              "progress": 100
             }
           ],
-          "createdAt": 1773861226580,
-          "updatedAt": 1773861236044
+          "createdAt": 1773861499716,
+          "updatedAt": 1773861505102
         }
       },
       "measured": {
         "width": 480,
-        "height": 490
-      },
-      "selected": false,
-      "dragging": false
+        "height": 320
+      }
     },
     {
       "id": "image-3",
       "type": "image",
       "position": {
-        "x": -91.67487684729065,
-        "y": 388.679802955665
+        "x": 714.3251231527094,
+        "y": -5.320197044334975
       },
       "data": {
         "title": "Image (Result)",
         "images": [
-          "https://picsum.photos/seed/repaint_text-%E8%B6%85%E6%B8%85-ae9acfc3/960/540?watermark=AI%E7%94%BB%E5%B8%83-ae9acfc3&action=repaint_text&prompt=%E8%B6%85%E6%B8%85&source=https%3A%2F%2Fpicsum.photos%2Fseed%2Ff924c307%2F960%2F540%3Fwatermark%3DAI%E7%94%BB%E5%B8%83-mock%26prompt%3Dmock",
-          "https://picsum.photos/seed/repaint_text-%E8%B6%85%E6%B8%85-8565698a/960/540?watermark=AI%E7%94%BB%E5%B8%83-8565698a&action=repaint_text&prompt=%E8%B6%85%E6%B8%85&source=https%3A%2F%2Fpicsum.photos%2Fseed%2Fe38af0e5%2F960%2F540%3Fwatermark%3DAI%E7%94%BB%E5%B8%83-mock%26prompt%3Dmock",
-          "https://picsum.photos/seed/repaint_text-%E8%B6%85%E6%B8%85-f6bd629a/960/540?watermark=AI%E7%94%BB%E5%B8%83-f6bd629a&action=repaint_text&prompt=%E8%B6%85%E6%B8%85&source=https%3A%2F%2Fpicsum.photos%2Fseed%2Ffcff4ecd%2F960%2F540%3Fwatermark%3DAI%E7%94%BB%E5%B8%83-mock%26prompt%3Dmock",
-          "https://picsum.photos/seed/repaint_text-%E8%B6%85%E6%B8%85-ce1d90d0/960/540?watermark=AI%E7%94%BB%E5%B8%83-ce1d90d0&action=repaint_text&prompt=%E8%B6%85%E6%B8%85&source=https%3A%2F%2Fpicsum.photos%2Fseed%2F13c455ab%2F960%2F540%3Fwatermark%3DAI%E7%94%BB%E5%B8%83-mock%26prompt%3Dmock"
+          "https://picsum.photos/seed/repaint_local--45ab1160/960/540?watermark=AI%E7%94%BB%E5%B8%83-45ab1160&action=repaint_local&prompt=&source=https%3A%2F%2Fpicsum.photos%2Fseed%2Fef62db38%2F960%2F540%3Fwatermark%3DAI%E7%94%BB%E5%B8%83-mock%26prompt%3Dmock&mask=1864f377"
         ],
         "activeIndex": 0,
         "status": "success",
-        "lastAction": "repaint_text",
+        "lastAction": "repaint_local",
         "sourceNodeId": "image-1",
         "sourceImages": [
-          "https://picsum.photos/seed/f924c307/960/540?watermark=AI画布-mock&prompt=mock",
-          "https://picsum.photos/seed/e38af0e5/960/540?watermark=AI画布-mock&prompt=mock",
-          "https://picsum.photos/seed/fcff4ecd/960/540?watermark=AI画布-mock&prompt=mock",
-          "https://picsum.photos/seed/13c455ab/960/540?watermark=AI画布-mock&prompt=mock"
+          "https://picsum.photos/seed/ef62db38/960/540?watermark=AI画布-mock&prompt=mock"
         ],
-        "sourceAction": "repaint_text",
-        "sourcePrompt": "超清",
+        "sourceAction": "repaint_local",
         "aiTask": {
-          "id": "aitask_6286b24f-bd74-4da1-8ef4-28c3ec7e5f50",
-          "action": "repaint_text",
-          "prompt": "超清",
+          "id": "aitask_ec8cca73-8886-48f6-a311-4b9c35d64459",
+          "action": "repaint_local",
           "status": "success",
           "progress": 100,
           "items": [
@@ -143,43 +105,30 @@
               "index": 0,
               "status": "success",
               "progress": 100
-            },
-            {
-              "index": 1,
-              "status": "success",
-              "progress": 100
-            },
-            {
-              "index": 2,
-              "status": "success",
-              "progress": 100
-            },
-            {
-              "index": 3,
-              "status": "success",
-              "progress": 100
             }
           ],
-          "createdAt": 1773861259794,
-          "updatedAt": 1773861271086
+          "createdAt": 1773861617835,
+          "updatedAt": 1773861625521
         }
       },
       "measured": {
         "width": 480,
-        "height": 490
+        "height": 320
       }
     }
   ],
   "edges": [
     {
-      "id": "e_image-1_image-2_99021f76-548a-42fe-8c2b-f81c3e8f28e0",
+      "id": "e_image-1_image-2_e05f9b5c-9391-4e37-ab20-42ed4d310d06",
       "source": "image-1",
-      "target": "image-2"
+      "target": "image-2",
+      "selected": false
     },
     {
-      "id": "e_image-1_image-3_8a1c307c-2cc4-457e-b338-a35b1dd4e3ea",
+      "id": "e_image-1_image-3_213bbc0e-fb4f-4dae-a741-3449e934afab",
       "source": "image-1",
-      "target": "image-3"
+      "target": "image-3",
+      "selected": false
     }
   ]
 }

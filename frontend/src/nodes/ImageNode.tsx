@@ -1,5 +1,5 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   useCanvasStore,
   type ImageData,
@@ -25,6 +25,68 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
     prompt: string
     open: boolean
   } | null>(null)
+
+  // repaint_local：mask 画布（涂抹遮罩）
+  //
+  // 局部重绘（mask 涂抹）实现原理（当前为前端输入+参数透传的 mock 实现）：
+  // 1) 用户在“预览图区域”上涂抹（白色笔迹表示需要重绘/保留的区域，约定由后端解释）
+  // 2) 画布坐标映射：把用户指针的 clientX/clientY 映射到 256x256 的 mask canvas 坐标系
+  //    - 这样做的好处是：mask 大小固定，便于后续编码与参数传输
+  // 3) 提交时生成输入 token：
+  //    - 先把 canvas.toDataURL('image/png') 得到 mask 数据
+  //    - 再做一个轻量 hash，把超长 base64 压缩成短 token（避免把大字符串塞进节点数据，影响保存/传输）
+  // 4) 通过 `runImageNodeAction({ action: 'repaint_local', mask })` 把 token 透传给后端
+  // 5) 后端在任务执行阶段（ai-task.service）基于 mask token 的摘要生成不同的 mock resultUrl
+  //
+  // 注意：
+  // - 这里没有真正做像素级“把 mask 应用到图片”的图像处理（后端 mock 的职责是验证业务链路）
+  // - 真正生产实现时：后端会把 mask token 解码为 mask 图，并进行重绘/抠图等融合运算
+  const maskCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const maskDrawingRef = useRef(false)
+  const maskLastPointRef = useRef<{ x: number; y: number } | null>(null)
+  const MASK_SIZE = 256
+  const MASK_BRUSH_RADIUS = 12
+
+  const clearMask = useCallback(() => {
+    const canvas = maskCanvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+  }, [])
+
+  const getMaskDataUrl = useCallback((): string | undefined => {
+    const canvas = maskCanvasRef.current
+    if (!canvas) return undefined
+    try {
+      return canvas.toDataURL('image/png')
+    } catch {
+      return undefined
+    }
+  }, [])
+
+  const hashMaskInput = useCallback((input: string): string => {
+    // 轻量 hash：
+    // - 用于“区分不同遮罩”，避免把超长 base64 存入节点数据（会显著影响 local 保存和网络传输）
+    // - 这里只用于 demo/mock 的“可追踪性”；不是安全哈希，不用于加密/鉴权场景
+    let h1 = 0xdeadbeef ^ input.length
+    let h2 = 0x41c6ce57 ^ input.length
+    for (let i = 0; i < input.length; i++) {
+      const ch = input.charCodeAt(i)
+      h1 = Math.imul(h1 ^ ch, 2654435761)
+      h2 = Math.imul(h2 ^ ch, 1597334677)
+    }
+    h1 = (h1 ^ (h1 >>> 16)) >>> 0
+    h2 = (h2 ^ (h2 >>> 16)) >>> 0
+    const hex = (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0')
+    return hex.slice(0, 12)
+  }, [])
+
+  useEffect(() => {
+    if (composer?.open && composer.action === 'repaint_local') {
+      clearMask()
+    }
+  }, [composer?.action, composer?.open, clearMask])
 
   const activeUrl = useMemo(() => {
     const idx = Math.max(0, Math.min(data.activeIndex, data.images.length - 1))
@@ -395,6 +457,7 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
                       nodeId: id,
                       action: data.sourceAction,
                       prompt: data.sourcePrompt,
+                      mask: data.sourceAction === 'repaint_local' ? data.sourceMask : undefined,
                     })
                   : setComposer({
                       action: 'repaint_local',
@@ -553,6 +616,111 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
                   关闭
                 </button>
               </div>
+
+              {composer.action === 'repaint_local' ? (
+                <div className="mt-3">
+                  <div className="text-xs font-medium text-slate-300">
+                    mask 涂抹遮罩（局部重绘输入，当前为 mock）
+                  </div>
+                  <div className="relative mt-2 h-[256px] w-full overflow-hidden rounded-xl border border-slate-800 bg-black/20">
+                    <img
+                      src={activeUrl}
+                      alt="mask-source"
+                      className="h-full w-full object-cover"
+                      draggable={false}
+                    />
+                    <canvas
+                      ref={maskCanvasRef}
+                      width={MASK_SIZE}
+                      height={MASK_SIZE}
+                      className="absolute inset-0 h-full w-full cursor-crosshair touch-none"
+                      onPointerDown={(e) => {
+                        e.stopPropagation()
+                        e.preventDefault()
+                        const canvas = maskCanvasRef.current
+                        if (!canvas) return
+                        canvas.setPointerCapture(e.pointerId)
+                        maskDrawingRef.current = true
+                        maskLastPointRef.current = null
+
+                        const rect = canvas.getBoundingClientRect()
+                        const x = ((e.clientX - rect.left) * canvas.width) / rect.width
+                        const y = ((e.clientY - rect.top) * canvas.height) / rect.height
+                        maskLastPointRef.current = { x, y }
+
+                        const ctx = canvas.getContext('2d')
+                        if (!ctx) return
+                        ctx.fillStyle = 'rgba(255,255,255,0.95)'
+                        ctx.beginPath()
+                        ctx.arc(x, y, MASK_BRUSH_RADIUS, 0, Math.PI * 2)
+                        ctx.fill()
+                      }}
+                      onPointerMove={(e) => {
+                        if (!maskDrawingRef.current) return
+                        e.stopPropagation()
+                        e.preventDefault()
+                        const canvas = maskCanvasRef.current
+                        if (!canvas) return
+                        const rect = canvas.getBoundingClientRect()
+                        const x = ((e.clientX - rect.left) * canvas.width) / rect.width
+                        const y = ((e.clientY - rect.top) * canvas.height) / rect.height
+
+                        const last = maskLastPointRef.current
+                        const ctx = canvas.getContext('2d')
+                        if (!ctx) return
+
+                        ctx.strokeStyle = 'rgba(255,255,255,0.95)'
+                        ctx.lineWidth = MASK_BRUSH_RADIUS * 2
+                        ctx.lineCap = 'round'
+                        ctx.lineJoin = 'round'
+
+                        if (last) {
+                          ctx.beginPath()
+                          ctx.moveTo(last.x, last.y)
+                          ctx.lineTo(x, y)
+                          ctx.stroke()
+                        } else {
+                          ctx.beginPath()
+                          ctx.arc(x, y, MASK_BRUSH_RADIUS, 0, Math.PI * 2)
+                          ctx.fill()
+                        }
+                        maskLastPointRef.current = { x, y }
+                      }}
+                      onPointerUp={(e) => {
+                        e.stopPropagation()
+                        e.preventDefault()
+                        maskDrawingRef.current = false
+                        maskLastPointRef.current = null
+                        const canvas = maskCanvasRef.current
+                        try {
+                          canvas?.releasePointerCapture(e.pointerId)
+                        } catch {
+                          // no-op
+                        }
+                      }}
+                      onPointerCancel={(e) => {
+                        e.stopPropagation()
+                        e.preventDefault()
+                        maskDrawingRef.current = false
+                        maskLastPointRef.current = null
+                      }}
+                    />
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={() => clearMask()}
+                      className="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold text-slate-100 hover:border-slate-700"
+                    >
+                      清空遮罩
+                    </button>
+                    <div className="text-[11px] text-slate-400">在图片上涂抹要重绘的区域</div>
+                  </div>
+                </div>
+              ) : null}
+
               <textarea
                 value={composer.prompt}
                 onChange={(e) =>
@@ -574,7 +742,9 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
                   onClick={() => {
                     const action = composer.action
                     const prompt = composer.prompt.trim() || undefined
-                    runImageNodeAction({ nodeId: id, action, prompt })
+                    const maskDataUrl = action === 'repaint_local' ? getMaskDataUrl() : undefined
+                    const mask = maskDataUrl ? `mask_${hashMaskInput(maskDataUrl)}` : undefined
+                    runImageNodeAction({ nodeId: id, action, prompt, mask })
                     setComposer(null)
                   }}
                   className="rounded-xl border border-amber-300/30 bg-amber-300/10 px-3 py-1.5 text-xs font-semibold text-amber-100 hover:border-amber-300/50"

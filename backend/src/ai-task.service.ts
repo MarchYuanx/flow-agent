@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import type { ImageAction } from './app.service';
 import { AppService } from './app.service';
 
@@ -14,6 +14,7 @@ export type ImageActionTaskPayload = {
   imageUrl: string;
   action: ImageAction;
   prompt?: string;
+  mask?: string;
 };
 
 export type VideoGenerateTaskPayload = {
@@ -69,12 +70,21 @@ export class AiTaskService {
       const safeImageUrl = imageUrl.length > 0 ? imageUrl : 'EMPTY_IMAGE_URL';
       const action = payload.action ?? 'tweak';
       const prompt = payload.prompt;
+      const mask = payload.mask?.trim();
+      // mask 由前端“局部重绘 mask 画布”编码/压缩后的 token 透传而来。
+      // 当前后端是 mock 实现：不做真正的像素级重绘，而是把 mask token 摘要拼进返回 URL，
+      // 以便前端能观察到“不同遮罩会导致不同结果”的业务链路是否打通。
+      const maskDigest = mask
+        ? createHash('sha1').update(mask).digest('hex').slice(0, 8)
+        : undefined;
       const { imageUrl: url } = this.appService.applyImageAction({
         imageUrl: safeImageUrl,
         action,
         prompt,
       });
-      return url;
+      if (!maskDigest) return url;
+      const joiner = url.includes('?') ? '&' : '?';
+      return `${url}${joiner}mask=${encodeURIComponent(maskDigest)}`;
     }
 
     // video_generate

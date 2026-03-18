@@ -146,6 +146,16 @@ export type ImageData = {
   sourceImages?: string[]
   sourceAction?: ImageAction
   sourcePrompt?: string
+  /**
+   * 局部重绘（`repaint_local`）使用的涂抹遮罩（mask）。
+   *
+   * 设计要点：
+   * - 前端在 mask canvas 上涂抹后，会生成一个短 token（避免把超长 base64 写入节点数据）
+   * - 该 token 随着“源信息”被记录在节点 `data` 上，确保“再次生成”能复用相同遮罩
+   * - 当 `runImageNodeAction({ action: 'repaint_local', mask })` 启动后端任务时，store 会把该 token
+   *   透传给 `startAiTask(kind=image_action)`，由后端任务决定结果（当前为 mock）
+   */
+  sourceMask?: string
   progress?: number
   progresses?: number[]
   imageErrors?: Array<string | null>
@@ -238,7 +248,9 @@ type CanvasState = {
 
   run: (generateImage: (req: GenerateImageRequest) => Promise<string>) => Promise<void>
   runNode: (nodeId: string) => Promise<void>
-  runImageNodeAction: (params: { nodeId: string; action: ImageAction; prompt?: string }) => Promise<void>
+  runImageNodeAction: (
+    params: { nodeId: string; action: ImageAction; prompt?: string; mask?: string | undefined },
+  ) => Promise<void>
 }
 
 let nodeSeq = 1
@@ -1100,7 +1112,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }
   },
 
-  runImageNodeAction: async ({ nodeId, action, prompt }) => {
+  runImageNodeAction: async ({ nodeId, action, prompt, mask }) => {
     const node = get().nodes.find((n) => n.id === nodeId)
     if (!node || node.type !== 'image') return
 
@@ -1179,6 +1191,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
             sourceImages,
             sourceAction: action,
             sourcePrompt: prompt,
+            sourceMask: action === 'repaint_local' ? mask : undefined,
           },
         } as CanvasNode
       }),
@@ -1578,6 +1591,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
               imageUrl: u,
               action,
               prompt,
+              mask: action === 'repaint_local' ? mask : undefined,
             })
 
             const pollRes = await pollAiTask({

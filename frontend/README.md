@@ -26,6 +26,7 @@ pnpm dev:backend
 
 ## 业务模块（前端）
 
+- **前端详细文档**：见 `FRONTEND_DOC.md`（组件/模块设计与实现逻辑）
 - **画布编排（核心）**：拖拽节点、连线形成流程图；支持缩放、MiniMap、框选多选与整体拖动（`src/pages/CanvasPage.tsx`）。
 - **节点体系**：
   - **Text Input 节点**：输入文本，作为下游 Prompt 的上游输入（`src/nodes/TextInputNode.tsx`）。

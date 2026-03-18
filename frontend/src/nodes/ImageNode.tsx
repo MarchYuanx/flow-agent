@@ -595,6 +595,12 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
       ) : null}
 
       <Handle
+        type="target"
+        position={Position.Left}
+        className="!h-3.5 !w-3.5 !border-2 !border-sky-300/80 !bg-slate-950 !shadow"
+        style={{ left: -7, zIndex: 30 }}
+      />
+      <Handle
         type="source"
         position={Position.Right}
         className="!h-3.5 !w-3.5 !border-2 !border-sky-300/80 !bg-slate-950 !shadow"

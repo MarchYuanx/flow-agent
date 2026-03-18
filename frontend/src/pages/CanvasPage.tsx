@@ -19,6 +19,7 @@ import { useApi } from '../hooks/useApi'
 import { TextInputNode } from '../nodes/TextInputNode'
 import { LlmGenerateNode } from '../nodes/LlmGenerateNode'
 import { ImageNode } from '../nodes/ImageNode'
+import { VideoNode } from '../nodes/VideoNode'
 import { useCanvasStore, type CanvasNode, type NodeType } from '../store/canvasStore'
 
 export function CanvasPage() {
@@ -64,6 +65,7 @@ export function CanvasPage() {
         text_input: TextInputNode,
         llm_generate: LlmGenerateNode,
         image: ImageNode,
+        video: VideoNode,
       }) satisfies NodeTypes,
     [],
   )

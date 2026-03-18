@@ -12,7 +12,7 @@ import { create } from 'zustand'
 import { executeDag, executeDagToTarget, DagCycleError } from '../utils/dagExecutor'
 import type { ImageAction } from '../hooks/useApi'
 
-export type NodeType = 'text_input' | 'llm_generate' | 'image'
+export type NodeType = 'text_input' | 'llm_generate' | 'image' | 'video'
 
 export type RunStatus = 'idle' | 'running' | 'success' | 'error'
 
@@ -112,11 +112,27 @@ export type ImageData = {
   aiTask?: ImageAiTask
 }
 
-export type CanvasNodeData = TextInputData | LlmGenerateData | ImageData
+export type VideoData = {
+  title: string
+  videos: string[]
+  activeIndex: number
+  status: RunStatus
+  errorMessage?: string
+  /** 任务来源（用于追溯） */
+  sourceNodeId?: string
+  sourceImages?: string[]
+  sourceAction?: ImageAction
+  sourcePrompt?: string
+  /** 统一的 AI 任务状态（生成视频） */
+  aiTask?: ImageAiTask
+}
+
+export type CanvasNodeData = TextInputData | LlmGenerateData | ImageData | VideoData
 export type CanvasNode = Node<CanvasNodeData, NodeType>
 export type TextInputNodeType = Node<TextInputData, 'text_input'>
 export type LlmGenerateNodeType = Node<LlmGenerateData, 'llm_generate'>
 export type ImageNodeType = Node<ImageData, 'image'>
+export type VideoNodeType = Node<VideoData, 'video'>
 
 type CanvasState = {
   nodes: CanvasNode[]
@@ -318,7 +334,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   onEdgesChange: (changes) =>
     set((state) => ({ edges: applyEdgeChanges(changes, state.edges) })),
   onConnect: (connection) =>
-    set((state) => ({ edges: addEdge(connection, state.edges) })),
+    set((state) => {
+      const sourceNode = state.nodes.find((n) => n.id === connection.source)
+      if (sourceNode?.type === 'video') {
+        // 视频节点只能作为终止节点：禁止从 video 往外连
+        return state
+      }
+      return { ...state, edges: addEdge(connection, state.edges) }
+    }),
 
   setSelectedNodeId: (nodeId) => set({ selectedNodeId: nodeId }),
   appendLog: (entry) =>
@@ -458,6 +481,18 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           data: {
             title: 'LLM Generate',
             prompt: '',
+            status: 'idle',
+          },
+        }
+      }
+
+      if (type === 'video') {
+        return {
+          ...base,
+          data: {
+            title: 'Video',
+            videos: [],
+            activeIndex: 0,
             status: 'idle',
           },
         }
@@ -881,36 +916,82 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       try {
         // 多图：对每张图片都生成一个视频链接（模拟）
         const urls = sourceImages.length > 0 ? sourceImages : [activeUrl]
-        const items = urls.map((_, idx) => ({ index: idx, status: 'running' as const, progress: 100 }))
-        set((state) => ({
-          nodes: state.nodes.map((n) => {
-            if (n.id !== nodeId || n.type !== 'image') return n
-            const d = n.data as ImageData
-            const now = Date.now()
-            return {
-              ...n,
-              data: {
-                ...d,
-                aiTask: {
-                  id: taskId,
-                  action,
-                  prompt,
-                  status: 'running',
-                  progress: 100,
-                  items,
-                  createdAt: d.aiTask?.createdAt ?? now,
-                  updatedAt: now,
-                },
-              },
-            } as CanvasNode
-          }),
-        }))
         const results = await Promise.all(
           urls.map(async (u, idx) => ({
             idx,
             videoUrl: await generateVideo({ imageUrl: u, prompt }),
           })),
         )
+
+        // 生成结果节点（Video）：只能由任务生成，不在左侧 palette 暴露
+        const targetId = `video-${nodeSeq++}`
+        const now = Date.now()
+        const items = urls.map((_, idx) => ({ index: idx, status: 'success' as const, progress: 100 }))
+        set((state) => {
+          const sourceUpdated = state.nodes.map((n) => {
+            if (n.id !== nodeId || n.type !== 'image') return n
+            const d = n.data as ImageData
+            return {
+              ...n,
+              data: {
+                ...d,
+                status: 'success',
+                errorMessage: undefined,
+                lastAction: action,
+                aiTask: d.aiTask
+                  ? { ...d.aiTask, status: 'success', progress: 100, items, updatedAt: now }
+                  : d.aiTask,
+              },
+            } as CanvasNode
+          })
+
+          const videos = results
+            .sort((a, b) => a.idx - b.idx)
+            .map((r) => r.videoUrl)
+            .filter(Boolean)
+
+          const videoNode: CanvasNode = {
+            id: targetId,
+            type: 'video',
+            position: {
+              x: sourceNodeNow.position.x + 420,
+              y: sourceNodeNow.position.y,
+            },
+            data: {
+              title: 'Video (Result)',
+              videos,
+              activeIndex: 0,
+              status: 'success',
+              sourceNodeId: nodeId,
+              sourceImages: urls,
+              sourceAction: action,
+              sourcePrompt: prompt,
+              aiTask: {
+                id: taskId,
+                action,
+                prompt,
+                status: 'success',
+                progress: 100,
+                items,
+                createdAt: now,
+                updatedAt: now,
+              },
+            },
+          }
+
+          const newEdge = {
+            id: `e_${nodeId}_${targetId}_${crypto.randomUUID()}`,
+            source: nodeId,
+            target: targetId,
+          }
+
+          return {
+            ...state,
+            nodes: [...sourceUpdated, videoNode],
+            edges: [...state.edges, newEdge],
+            selectedNodeId: targetId,
+          }
+        })
         console.info('[AI][imageAction] success', {
           nodeId,
           nodeType: node.type,

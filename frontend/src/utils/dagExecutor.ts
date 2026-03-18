@@ -4,6 +4,7 @@ import type {
   ImageData,
   LlmGenerateData,
   TextInputData,
+  VideoData,
 } from '../store/canvasStore'
 
 export type DagNodeId = string
@@ -121,6 +122,15 @@ async function executeTopo(params: {
       const idx = Math.max(0, Math.min(data.activeIndex, data.images.length - 1))
       const url = (data.images[idx] ?? '').trim()
       outputs.set(id, { kind: 'image', url })
+      continue
+    }
+
+    if (node.type === 'video') {
+      const data = node.data as VideoData
+      const idx = Math.max(0, Math.min(data.activeIndex, data.videos.length - 1))
+      const url = (data.videos[idx] ?? '').trim()
+      // 当前 DAG 执行并不消费 video 输出，统一塞到 outputs 里便于未来扩展
+      outputs.set(id, { kind: 'text', text: url })
       continue
     }
 

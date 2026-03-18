@@ -75,6 +75,24 @@ export type LlmGenerateData = {
   errorMessage?: string
 }
 
+export type ImageAiTaskItem = {
+  index: number
+  status: RunStatus
+  progress: number
+  errorMessage?: string
+}
+
+export type ImageAiTask = {
+  id: string
+  action: ImageAction
+  prompt?: string
+  status: RunStatus
+  progress: number
+  items?: ImageAiTaskItem[]
+  createdAt: number
+  updatedAt: number
+}
+
 export type ImageData = {
   title: string
   images: string[]
@@ -90,6 +108,8 @@ export type ImageData = {
   progress?: number
   progresses?: number[]
   imageErrors?: Array<string | null>
+  /** 统一的图片 AI 任务状态（局部重绘/抠图/超清/文字重绘/生成视频等） */
+  aiTask?: ImageAiTask
 }
 
 export type CanvasNodeData = TextInputData | LlmGenerateData | ImageData
@@ -265,6 +285,12 @@ function stopAllProgressForNode(nodeId: string) {
   for (const key of progressTimers.keys()) {
     if (key === nodeId || key.startsWith(prefix)) stopProgress(key)
   }
+}
+
+function calcOverallProgress(items: Array<{ progress: number }> | undefined, fallback: number): number {
+  if (!items || items.length === 0) return fallback
+  const sum = items.reduce((a, b) => a + (Number.isFinite(b.progress) ? b.progress : 0), 0)
+  return Math.max(0, Math.min(100, Math.round(sum / items.length)))
 }
 
 export const useCanvasStore = create<CanvasState>((set, get) => ({
@@ -826,13 +852,28 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         return
       }
 
+      const taskId = `aitask_${crypto.randomUUID()}`
       set((state) => ({
         nodes: state.nodes.map((n) => {
           if (n.id !== nodeId) return n
           const data = n.data as ImageData
           return {
             ...n,
-            data: { ...data, status: 'running', errorMessage: undefined, lastAction: action },
+            data: {
+              ...data,
+              status: 'running',
+              errorMessage: undefined,
+              lastAction: action,
+              aiTask: {
+                id: taskId,
+                action,
+                prompt,
+                status: 'running',
+                progress: 1,
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              },
+            },
           } as CanvasNode
         }),
       }))
@@ -840,6 +881,30 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       try {
         // 多图：对每张图片都生成一个视频链接（模拟）
         const urls = sourceImages.length > 0 ? sourceImages : [activeUrl]
+        const items = urls.map((_, idx) => ({ index: idx, status: 'running' as const, progress: 100 }))
+        set((state) => ({
+          nodes: state.nodes.map((n) => {
+            if (n.id !== nodeId || n.type !== 'image') return n
+            const d = n.data as ImageData
+            const now = Date.now()
+            return {
+              ...n,
+              data: {
+                ...d,
+                aiTask: {
+                  id: taskId,
+                  action,
+                  prompt,
+                  status: 'running',
+                  progress: 100,
+                  items,
+                  createdAt: d.aiTask?.createdAt ?? now,
+                  updatedAt: now,
+                },
+              },
+            } as CanvasNode
+          }),
+        }))
         const results = await Promise.all(
           urls.map(async (u, idx) => ({
             idx,
@@ -868,7 +933,24 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
             const data = n.data as ImageData
             return {
               ...n,
-              data: { ...data, status: 'success', errorMessage: undefined, lastAction: action },
+              data: {
+                ...data,
+                status: 'success',
+                errorMessage: undefined,
+                lastAction: action,
+                aiTask: data.aiTask
+                  ? { ...data.aiTask, status: 'success', progress: 100, updatedAt: Date.now() }
+                  : {
+                      id: taskId,
+                      action,
+                      prompt,
+                      status: 'success',
+                      progress: 100,
+                      items,
+                      createdAt: Date.now(),
+                      updatedAt: Date.now(),
+                    },
+              },
             } as CanvasNode
           }),
         }))
@@ -903,7 +985,23 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
             const data = n.data as ImageData
             return {
               ...n,
-              data: { ...data, status: 'error', errorMessage: message, lastAction: action },
+              data: {
+                ...data,
+                status: 'error',
+                errorMessage: message,
+                lastAction: action,
+                aiTask: data.aiTask
+                  ? { ...data.aiTask, status: 'error', progress: 100, updatedAt: Date.now() }
+                  : {
+                      id: taskId,
+                      action,
+                      prompt,
+                      status: 'error',
+                      progress: 100,
+                      createdAt: Date.now(),
+                      updatedAt: Date.now(),
+                    },
+              },
             } as CanvasNode
           }),
         }))
@@ -933,6 +1031,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
       // 结果应该是一个“多图片结果节点”
       const targetId = `image-${nodeSeq++}`
+      const taskId = `aitask_${crypto.randomUUID()}`
       set((state) => {
         const sourceUpdated = state.nodes.map((n) => {
           if (n.id !== nodeId) return n
@@ -944,8 +1043,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         })
 
         const placeholderImages = urls.map(() => '')
-        const progresses = urls.map(() => 1)
-        const imageErrors: Array<string | null> = urls.map(() => null)
+        const items = urls.map((_, idx) => ({ index: idx, status: 'running' as const, progress: 1 }))
+        const now = Date.now()
 
         const newNode: CanvasNode = {
           id: targetId,
@@ -964,9 +1063,16 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
             sourceImages: urls,
             sourceAction: action,
             sourcePrompt: prompt,
-            progress: 1,
-            progresses,
-            imageErrors,
+            aiTask: {
+              id: taskId,
+              action,
+              prompt,
+              status: 'running',
+              progress: 1,
+              items,
+              createdAt: now,
+              updatedAt: now,
+            },
           },
         }
 
@@ -999,15 +1105,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
                 nodes: state.nodes.map((n) => {
                   if (n.id !== targetId || n.type !== 'image') return n
                   const d = n.data as ImageData
-                  const progresses = (d.progresses ?? []).slice()
-                  progresses[idx] = value
-                  const overall =
-                    progresses.length > 0
-                      ? Math.round(progresses.reduce((a, b) => a + b, 0) / progresses.length)
-                      : value
+                  const items = (d.aiTask?.items ?? []).slice()
+                  if (items[idx]) items[idx] = { ...items[idx], progress: value, status: 'running' }
+                  const overall = calcOverallProgress(items, value)
                   return {
                     ...n,
-                    data: { ...d, progresses, progress: overall },
+                    data: {
+                      ...d,
+                      aiTask: d.aiTask
+                        ? { ...d.aiTask, status: 'running', items, progress: overall, updatedAt: Date.now() }
+                        : d.aiTask,
+                    },
                   } as CanvasNode
                 }),
               }))
@@ -1045,22 +1153,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
                 const d = n.data as ImageData
                 const images = d.images.slice()
                 images[idx] = newUrl
-                const progresses = (d.progresses ?? []).slice()
-                progresses[idx] = 100
-                const imageErrors = (d.imageErrors ?? []).slice()
-                imageErrors[idx] = null
-                const overall =
-                  progresses.length > 0
-                    ? Math.round(progresses.reduce((a, b) => a + b, 0) / progresses.length)
-                    : 100
+                const items = (d.aiTask?.items ?? []).slice()
+                if (items[idx]) items[idx] = { ...items[idx], progress: 100, status: 'success', errorMessage: undefined }
+                const overall = calcOverallProgress(items, 100)
                 return {
                   ...n,
                   data: {
                     ...d,
                     images,
-                    progresses,
-                    imageErrors,
-                    progress: overall,
+                    aiTask: d.aiTask
+                      ? { ...d.aiTask, status: 'running', items, progress: overall, updatedAt: Date.now() }
+                      : d.aiTask,
                   },
                 } as CanvasNode
               }),
@@ -1092,17 +1195,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
               nodes: state.nodes.map((n) => {
                 if (n.id !== targetId || n.type !== 'image') return n
                 const d = n.data as ImageData
-                const progresses = (d.progresses ?? []).slice()
-                progresses[idx] = 100
-                const imageErrors = (d.imageErrors ?? []).slice()
-                imageErrors[idx] = message
-                const overall =
-                  progresses.length > 0
-                    ? Math.round(progresses.reduce((a, b) => a + b, 0) / progresses.length)
-                    : 100
+                const items = (d.aiTask?.items ?? []).slice()
+                if (items[idx]) items[idx] = { ...items[idx], progress: 100, status: 'error', errorMessage: message }
+                const overall = calcOverallProgress(items, 100)
                 return {
                   ...n,
-                  data: { ...d, progresses, imageErrors, progress: overall },
+                  data: {
+                    ...d,
+                    aiTask: d.aiTask
+                      ? { ...d.aiTask, status: 'running', items, progress: overall, updatedAt: Date.now() }
+                      : d.aiTask,
+                  },
                 } as CanvasNode
               }),
             }))
@@ -1135,7 +1238,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
               ...d,
               status: allOk ? 'success' : 'error',
               errorMessage: allOk ? undefined : `部分失败：${urls.length - okCount}/${urls.length}`,
-              progress: 100,
+              aiTask: d.aiTask
+                ? {
+                    ...d.aiTask,
+                    status: allOk ? 'success' : 'error',
+                    progress: 100,
+                    updatedAt: Date.now(),
+                    items: d.aiTask.items?.map((it) => ({ ...it, progress: 100 })) ?? d.aiTask.items,
+                  }
+                : d.aiTask,
             },
           } as CanvasNode
         }),
@@ -1164,7 +1275,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           const data = n.data as ImageData
           return {
             ...n,
-            data: { ...data, status: 'error', errorMessage: message, lastAction: action },
+            data: {
+              ...data,
+              status: 'error',
+              errorMessage: message,
+              lastAction: action,
+              aiTask: data.aiTask
+                ? { ...data.aiTask, status: 'error', progress: 100, updatedAt: Date.now() }
+                : data.aiTask,
+            },
           } as CanvasNode
         }),
       }))

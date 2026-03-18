@@ -5,32 +5,7 @@ import {
   type LlmGenerateData,
   type LlmGenerateNodeType,
 } from '../store/canvasStore'
-
-function StatusPill({ status }: { status: LlmGenerateData['status'] }) {
-  const cls =
-    status === 'idle'
-      ? 'bg-slate-700/60 text-slate-200'
-      : status === 'running'
-        ? 'bg-blue-500/20 text-blue-200'
-        : status === 'success'
-          ? 'bg-emerald-500/20 text-emerald-200'
-          : 'bg-rose-500/20 text-rose-200'
-
-  const label =
-    status === 'idle'
-      ? 'idle'
-      : status === 'running'
-        ? 'running'
-        : status === 'success'
-          ? 'success'
-          : 'error'
-
-  return (
-    <span className={`rounded px-2 py-0.5 text-[11px] font-medium ${cls}`}>
-      {label}
-    </span>
-  )
-}
+import { StatusPill } from '../components/StatusPill'
 
 export function LlmGenerateNode(props: NodeProps<LlmGenerateNodeType>) {
   const { id, data, selected } = props

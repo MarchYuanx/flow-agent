@@ -6,32 +6,7 @@ import {
   type ImageNodeType,
 } from '../store/canvasStore'
 import type { ImageAction } from '../hooks/useApi'
-
-function StatusPill({ status }: { status: ImageData['status'] }) {
-  const cls =
-    status === 'idle'
-      ? 'bg-slate-700/60 text-slate-200'
-      : status === 'running'
-        ? 'bg-blue-500/20 text-blue-200'
-        : status === 'success'
-          ? 'bg-emerald-500/20 text-emerald-200'
-          : 'bg-rose-500/20 text-rose-200'
-
-  const label =
-    status === 'idle'
-      ? 'idle'
-      : status === 'running'
-        ? 'running'
-        : status === 'success'
-          ? 'success'
-          : 'error'
-
-  return (
-    <span className={`rounded px-2 py-0.5 text-[11px] font-medium ${cls}`}>
-      {label}
-    </span>
-  )
-}
+import { StatusPill } from '../components/StatusPill'
 
 export function ImageNode(props: NodeProps<ImageNodeType>) {
   const { id, data, selected } = props
@@ -55,6 +30,9 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
     const idx = Math.max(0, Math.min(data.activeIndex, data.images.length - 1))
     return data.images[idx] ?? ''
   }, [data.activeIndex, data.images])
+
+  const task = data.aiTask
+  const taskRunning = task?.status === 'running'
 
   const removeActiveImage = useCallback(() => {
     updateNodeData(id, (prev) => {
@@ -219,11 +197,11 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
 
         <div>
           <div className="text-xs font-medium text-slate-300">预览</div>
-          {data.status === 'running' && data.images.length > 1 ? (
+          {taskRunning && data.images.length > 1 ? (
             <div className="mt-2 overflow-hidden rounded-lg border border-slate-800 bg-slate-950/40">
               <div className="grid grid-cols-2 gap-2 p-2">
                 {data.images.slice(0, 4).map((u, idx) => {
-                  const p = data.progresses?.[idx] ?? data.progress ?? 1
+                  const p = task?.items?.[idx]?.progress ?? task?.progress ?? 1
                   return (
                     <div
                       key={`${u}-${idx}`}
@@ -242,29 +220,29 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
               <div className="border-t border-slate-800 px-3 py-2">
                 <div className="flex items-center justify-between text-[11px] text-slate-300">
                   <span>生成中（共 {data.images.length} 张）</span>
-                  <span className="tabular-nums">{Math.min(99, data.progress ?? 1)}%</span>
+                  <span className="tabular-nums">{Math.min(99, task?.progress ?? 1)}%</span>
                 </div>
                 <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
                   <div
                     className="h-full rounded-full bg-amber-300/70"
-                    style={{ width: `${Math.min(99, data.progress ?? 1)}%` }}
+                    style={{ width: `${Math.min(99, task?.progress ?? 1)}%` }}
                   />
                 </div>
               </div>
             </div>
-          ) : data.status === 'running' ? (
+          ) : taskRunning ? (
             <div className="mt-2 overflow-hidden rounded-lg border border-slate-800 bg-slate-950/40">
               <div className="relative h-44 w-full">
                 <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-slate-800/40 via-slate-700/30 to-slate-800/40" />
                 <div className="absolute inset-x-3 bottom-3 rounded-xl border border-slate-800 bg-slate-950/70 p-3 backdrop-blur">
                   <div className="flex items-center justify-between text-[11px] text-slate-300">
                     <span>生成中</span>
-                    <span className="tabular-nums">{Math.min(99, data.progress ?? 1)}%</span>
+                    <span className="tabular-nums">{Math.min(99, task?.progress ?? 1)}%</span>
                   </div>
                   <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
                     <div
                       className="h-full rounded-full bg-amber-300/70"
-                      style={{ width: `${Math.min(99, data.progress ?? 1)}%` }}
+                      style={{ width: `${Math.min(99, task?.progress ?? 1)}%` }}
                     />
                   </div>
                 </div>

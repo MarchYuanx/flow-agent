@@ -28,8 +28,21 @@ export function TextInputNode(props: NodeProps<TextInputNodeType>) {
         selected ? 'border-violet-400/60' : 'border-slate-700/80',
       ].join(' ')}
     >
-      <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
-        <div className="text-sm font-semibold text-slate-100">{data.title}</div>
+      <div className="flex items-center justify-between border-b border-slate-800 bg-gradient-to-r from-violet-500/10 to-transparent px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-violet-400/20 bg-violet-500/10">
+            <svg viewBox="0 0 24 24" className="h-4 w-4 text-violet-200" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm2 4h8v2H8V8Zm0 4h8v2H8v-2Zm0 4h5v2H8v-2Z"
+              />
+            </svg>
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-[13px] font-semibold text-slate-100">{data.title}</div>
+            <div className="truncate text-[11px] text-slate-400">输入文本 · 作为下游 Prompt</div>
+          </div>
+        </div>
         <StatusPill status={data.status} />
       </div>
 
@@ -48,7 +61,12 @@ export function TextInputNode(props: NodeProps<TextInputNodeType>) {
         ) : null}
       </div>
 
-      <Handle type="source" position={Position.Right} />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!h-3.5 !w-3.5 !border-2 !border-violet-300/80 !bg-slate-950 !shadow"
+        style={{ right: -7, zIndex: 30 }}
+      />
     </div>
   )
 }

@@ -118,8 +118,24 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
         selected ? 'border-amber-300/60' : 'border-slate-700/80',
       ].join(' ')}
     >
-      <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
-        <div className="text-sm font-semibold text-slate-100">{data.title}</div>
+      <div className="flex items-center justify-between border-b border-slate-800 bg-gradient-to-r from-sky-500/10 to-transparent px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-sky-400/20 bg-sky-500/10">
+            <svg viewBox="0 0 24 24" className="h-4 w-4 text-sky-200" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Zm2 0v12h12V6H6Zm2 10 3-4 2 2 3-4 2 3v3H8Z"
+              />
+            </svg>
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-[13px] font-semibold text-slate-100">{data.title}</div>
+            <div className="truncate text-[11px] text-slate-400">
+              图片节点 · {data.images.length} 张
+              {data.lastAction ? ` · ${data.lastAction}` : ''}
+            </div>
+          </div>
+        </div>
         <StatusPill status={data.status} />
       </div>
 
@@ -578,7 +594,12 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
         </div>
       ) : null}
 
-      <Handle type="source" position={Position.Right} />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!h-3.5 !w-3.5 !border-2 !border-sky-300/80 !bg-slate-950 !shadow"
+        style={{ right: -7, zIndex: 30 }}
+      />
 
     </div>
   )

@@ -364,6 +364,77 @@ function calcOverallProgress(items: Array<{ progress: number }> | undefined, fal
   return Math.max(0, Math.min(100, Math.round(sum / items.length)))
 }
 
+function getNodeApproxSize(type: NodeType): { w: number; h: number } {
+  // 用于“换位”的矩形近似：不追求像素级精确，只要避免明显重叠即可
+  switch (type) {
+    case 'text_input':
+      return { w: 288, h: 180 }
+    case 'llm_generate':
+      return { w: 340, h: 300 }
+    case 'image':
+      return { w: 480, h: 420 }
+    case 'video':
+      return { w: 360, h: 360 }
+    default:
+      return { w: 320, h: 260 }
+  }
+}
+
+function rectsOverlap(
+  a: { x: number; y: number; w: number; h: number },
+  b: { x: number; y: number; w: number; h: number },
+  margin = 16,
+): boolean {
+  // a 的矩形，考虑 margin 扩张边界（更保守，避免“擦边重叠”）
+  const ax1 = a.x - margin
+  const ay1 = a.y - margin
+  const ax2 = a.x + a.w + margin
+  const ay2 = a.y + a.h + margin
+
+  const bx1 = b.x
+  const by1 = b.y
+  const bx2 = b.x + b.w
+  const by2 = b.y + b.h
+
+  return ax1 < bx2 && ax2 > bx1 && ay1 < by2 && ay2 > by1
+}
+
+/**
+ * 结果节点自动换位（避免覆盖现有节点）
+ *
+ * 规则：
+ * - preferred 默认放在源节点右侧：x + 420，y 同位
+ * - 若与现有节点矩形重叠，则先在 y 方向下移多行；
+ * - 若仍冲突，再向右移一档并重置 y。
+ */
+function findFreeNodePosition(
+  preferred: { x: number; y: number },
+  targetType: NodeType,
+  nodes: CanvasNode[],
+): { x: number; y: number } {
+  const { w, h } = getNodeApproxSize(targetType)
+
+  const stepX = 420
+  const stepY = 160
+  const maxAttempts = 36
+  const sameXRowCount = 6 // 每档尝试 6 行（y 方向）
+  const otherRects = nodes.map((n) => {
+    const size = getNodeApproxSize(n.type as NodeType)
+    return { id: n.id, x: n.position.x, y: n.position.y, w: size.w, h: size.h }
+  })
+
+  for (let i = 0; i < maxAttempts; i++) {
+    const row = Math.floor(i / sameXRowCount)
+    const col = i % sameXRowCount
+    const candidate = { x: preferred.x + row * stepX, y: preferred.y + col * stepY, w, h }
+    const collided = otherRects.some((r) => rectsOverlap(candidate, r))
+    if (!collided) return { x: candidate.x, y: candidate.y }
+  }
+
+  // 实在找不到可用位置：返回 preferred，保证功能不中断
+  return preferred
+}
+
 export const useCanvasStore = create<CanvasState>((set, get) => ({
   nodes: [],
   edges: [],
@@ -1070,10 +1141,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           const videoNode: CanvasNode = {
             id: targetId,
             type: 'video',
-            position: {
-              x: sourceNodeNow.position.x + 420,
-              y: sourceNodeNow.position.y,
-            },
+            position: findFreeNodePosition(
+              { x: sourceNodeNow.position.x + 420, y: sourceNodeNow.position.y },
+              'video',
+              get().nodes,
+            ),
             data: {
               title: 'Video (Result)',
               videos,
@@ -1247,10 +1319,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         const newNode: CanvasNode = {
           id: targetId,
           type: 'image',
-          position: {
-            x: sourceNodeNow.position.x + 420,
-            y: sourceNodeNow.position.y,
-          },
+          position: findFreeNodePosition(
+            { x: sourceNodeNow.position.x + 420, y: sourceNodeNow.position.y },
+            'image',
+            get().nodes,
+          ),
           data: {
             title: `Image (Result)`,
             images: placeholderImages,

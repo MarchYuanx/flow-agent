@@ -186,6 +186,81 @@ export async function executeDag(params: {
 }
 
 /**
+ * DAG 环检测（同步）
+ *
+ * 目的：
+ * - 在“用户连线之前”做一次快速校验，避免生成包含 cycle 的图。
+ * - 若检测到 cycle，则当前连线不应该生效（交互层负责不把边加入 state）。
+ *
+ * 思路（Kahn 拓扑排序判环）：
+ * 1. 把图抽象成邻接表（outAdj）+ 入度表（inDegree）
+ * 2. 初始化队列 queue：
+ *    - 将“入度为 0”的节点全部加入队列
+ * 3. 不断从队列取出节点 id：
+ *    - 将其加入 topo（表示这个节点可以被“剥离”/拓扑输出）
+ *    - 遍历它的后继 next：
+ *      - 将 next 的入度减 1（等价于“删掉边 id -> next”）
+ *      - 若 next 的入度减为 0，则 next 可继续出队
+ * 4. 循环结束后判断：
+ *    - 如果 topo 的长度 < nodes 的节点数，说明仍有节点无法被剥离，
+ *      - 这正是“存在环（cycle）”的充要表现（至少一个环上的节点永远无法入度归零）
+ *    - 反之如果 topo.length === nodes.length，则图无环（DAG）
+ *
+ * 与 executeDag 的关系：
+ * - executeDag/executeDagToTarget 内部也会通过拓扑排序判环，
+ *   并在检测到 cycle 时抛出 DagCycleError。
+ * - hasDagCycle 是更轻量的“连线前”版本，用于提升交互体验。
+ *
+ * 复杂度：
+ * - 构建邻接表与入度：O(V + E)
+ * - Kahn 剥离：O(V + E)
+ * - 总体 O(V + E)，适合在 onConnect 这种高频交互里同步使用。
+ */
+export function hasDagCycle(nodes: CanvasNode[], edges: Edge[]): boolean {
+  const nodeById = new Map(nodes.map((n) => [n.id, n]))
+
+  // inDegree 记录“每个节点当前的入度”
+  const inDegree = new Map<string, number>()
+  // outAdj 记录“每个节点指向哪些后继节点”
+  const outAdj = new Map<string, string[]>()
+  for (const n of nodes) {
+    inDegree.set(n.id, 0)
+    outAdj.set(n.id, [])
+  }
+
+  for (const e of edges) {
+    const src = e.source
+    const tgt = e.target
+    // 容错：如果边指向/指出不存在的节点（理论上不应该发生），直接忽略它。
+    if (!nodeById.has(src) || !nodeById.has(tgt)) continue
+    outAdj.get(src)!.push(tgt)
+    inDegree.set(tgt, (inDegree.get(tgt) ?? 0) + 1)
+  }
+
+  // Kahn：初始化队列为所有入度为 0 的节点
+  const queue: string[] = []
+  for (const [id, deg] of inDegree.entries()) {
+    if (deg === 0) queue.push(id)
+  }
+
+  // topo 记录“成功剥离”的节点顺序
+  const topo: string[] = []
+  while (queue.length > 0) {
+    const id = queue.shift()!
+    topo.push(id)
+    for (const next of outAdj.get(id) ?? []) {
+      // 等价于移除边 id -> next：next 的入度减 1
+      const deg = (inDegree.get(next) ?? 0) - 1
+      inDegree.set(next, deg)
+      if (deg === 0) queue.push(next)
+    }
+  }
+
+  // 若最终拓扑序长度 < 节点数，说明至少存在一个 cycle
+  return topo.length !== nodes.length
+}
+
+/**
  * 执行到指定节点（单节点运行用）
  *
  * 逻辑：从 target 往上游回溯出所有依赖节点集合 -> 只执行这些节点的拓扑序子集

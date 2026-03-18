@@ -9,7 +9,12 @@ import {
   type NodeChange,
 } from '@xyflow/react'
 import { create } from 'zustand'
-import { executeDag, executeDagToTarget, DagCycleError } from '../utils/dagExecutor'
+import {
+  executeDag,
+  executeDagToTarget,
+  DagCycleError,
+  hasDagCycle,
+} from '../utils/dagExecutor'
 import type { ImageAction } from '../hooks/useApi'
 
 /**
@@ -395,7 +400,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         // 视频节点只能作为终止节点：禁止从 video 往外连
         return state
       }
-      return { ...state, edges: addEdge(connection, state.edges) }
+
+      const nextEdges = addEdge(connection, state.edges)
+      if (hasDagCycle(state.nodes, nextEdges)) {
+        // 与执行时的 DagCycleError 一致：给用户明确反馈，并且“不允许”该连线生效
+        const message = '检测到环（cycle），该连线会导致流程无法执行，请调整连线后再试。'
+        return { ...state, globalError: message }
+      }
+
+      return { ...state, edges: nextEdges, globalError: null }
     }),
 
   setSelectedNodeId: (nodeId) => set({ selectedNodeId: nodeId }),

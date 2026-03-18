@@ -76,7 +76,8 @@ src/
 - **端点（Handle）**：节点组件内通过 `Handle` 暴露连接点：
   - `TextInputNode`：右侧 `source`（作为上游输出）
   - `LlmGenerateNode`：左侧 `target`（消费上游文本/图片）
-  - `ImageNode`：右侧 `source`（图片节点可作为后续操作的上游）
+  - `ImageNode`：左侧 `target` + 右侧 `source`（既可承接上游，也可输出到下游；支持“图片→图片/视频”结果链路）
+  - `VideoNode`：左侧 `target`（**终止节点**：只能被连入，不能连出）
 - **可点击性与可见性优化**：
   - 端点加大尺寸、加边框、提高 `zIndex`，并向外微移（避免被节点边框/圆角遮挡）
 - **连接事件（onConnect）**：
@@ -122,8 +123,13 @@ src/
 输入方式：
 
 - 本地上传：`URL.createObjectURL(file)`（便于快速预览）
-- 手动 URL：直接编辑当前图片 URL
 - 模拟上传：生成示例 URL（用于演示/调试）
+
+展示与选择（当前实现）：
+
+- **全量网格展示（上限 8 张）**：图片节点在内容区直接展示 `images` 的前 8 张缩略图（2 列网格），超过 8 张会提示“仅展示前 8 张”。
+- **勾选要操作的图片**：通过 `selectedIndexes`（索引集合）记录“哪些图片参与 AI 操作”。
+- **全选**：提供“全选（前 N 张）”开关，快速选择/取消选择前 8 张图片。
 
 #### 3.3.2 统一的 AI 任务状态（aiTask）
 
@@ -137,8 +143,8 @@ src/
 
 UI 展示逻辑：
 
-- 任务执行中（`aiTask.status === 'running'`）时展示进度面板
-- 多图时取 `items[idx].progress` 展示分图进度，并用整体平均值展示总体进度
+- 任务执行中（`aiTask.status === 'running'`）时展示**简洁进度条**（当前版本已移除图片节点底部“预览”模块）
+- 多图时 `items[idx]` 仍是并发一致性的最小粒度（回填/聚合依赖它），整体进度 `aiTask.progress` 为 items 平均值
 
 #### 3.3.2.1 AI 任务交互设计（动作入口 → 状态反馈 → 结果沉淀）
 
@@ -157,6 +163,7 @@ UI 展示逻辑：
 - **结果沉淀（新节点 + 连线）**
   - 图片操作的输出不覆盖源节点：创建新的 Image 结果节点并连边到源节点
   - 每张图完成后按索引回填到结果节点的 `images[idx]`，并追加到会话（chat image message）
+  - 视频生成成功后：创建新的 Video 结果节点并连边到源 Image 节点（`image → video`）
 
 关键实现要点：
 
@@ -253,7 +260,7 @@ UI 展示逻辑：
 文件：`src/nodes/ImageNode.tsx`
 
 - 多图输入：上传/URL/模拟
-- 展示：缩略图列表 + 预览区域（执行中展示进度面板）
+- 展示：**前 8 张网格缩略图 + 复选框选择 + 全选**；底部预览模块已移除，运行中仅显示简洁进度条
 - 工具栏（选中时出现）：再次生成/超清/抠图等动作入口 + 更多操作菜单
 - 输出端点：source handle（右侧）
 
@@ -411,7 +418,7 @@ tips 关闭由两类事件触发：
 - 节点 data：
   - `TextInputData`：`text + status`
   - `LlmGenerateData`：`prompt + resultImageUrl + status`
-  - `ImageData`：`images[] + activeIndex + status + aiTask? + source*`
+- `ImageData`：`images[] + activeIndex + selectedIndexes? + status + aiTask? + source*`
   - `VideoData`：`videos[] + activeIndex + status + aiTask? + source*`
 - 任务统一状态：
   - `ImageAiTask`：`action/prompt/status/progress/items/createdAt/updatedAt`
@@ -454,6 +461,9 @@ store 支持创建 `text_input/llm_generate/image/video`：
 - **任务统一状态（aiTask）**：
   - 多图并发用 `aiTask.items[idx]` 做最小粒度（progress/status/errorMessage）
   - `aiTask.progress` 作为整体进度（items 平均值）
+- **输入图片严格来自勾选**：
+  - 只对 `ImageData.selectedIndexes` 对应的图片执行任务
+  - 若未勾选任何图片，直接提示用户先选择（并写入日志），任务不启动
 - **结果节点不覆盖源节点**：
   - 图片任务产出新的 `image-*`，并创建 edge：`image → image`
   - 视频任务产出新的 `video-*`，并创建 edge：`image → video`
@@ -524,6 +534,14 @@ store 支持创建 `text_input/llm_generate/image/video`：
 
 - 根容器不能 `overflow-hidden`
 - 若要裁剪内部内容，应在内部子容器做裁剪，而不是根容器
+
+#### 8.7.3 图片网格点击行为（避免误选节点）
+
+为了避免“点击图片触发节点选中（从而弹出节点工具栏）”影响单图操作体验，图片网格内部的交互元素会 `stopPropagation()`：
+
+- 点击缩略图（设为 active）只更新 `activeIndex`
+- 单图按钮（收藏/预览/删除/复选框）只执行自身动作
+- 只有点击节点空白区域/外层，才触发节点选中与工具栏显示
 
 ### 8.8 工程化运行与调试
 

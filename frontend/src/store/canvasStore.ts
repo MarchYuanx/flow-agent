@@ -12,8 +12,30 @@ import { create } from 'zustand'
 import { executeDag, executeDagToTarget, DagCycleError } from '../utils/dagExecutor'
 import type { ImageAction } from '../hooks/useApi'
 
+/**
+ * 全局画布状态（Zustand 单一事实源）
+ *
+ * 设计目标：
+ * - **状态收敛**：nodes/edges、执行状态、日志、收藏、会话、预览、UI 折叠等跨区域状态统一在 store，避免 props 链与状态分裂。
+ * - **数据流清晰**：UI 只触发 action；复杂编排在 store 内完成；纯算法在 utils（如 DAG 执行器）中完成。
+ * - **可观测与可调试**：对 DAG/节点/图片任务统一写 logs；任务状态用 aiTask 统一表达，便于 UI 展示与排障。
+ *
+ * 关键数据流（高层）：
+ * - 画布交互（拖拽/连线/选择） → store 更新 `nodes/edges/selectedNodeId`
+ * - DAG 执行：
+ *   - UI 触发 `run()` / `runNode(nodeId)`
+ *   - store 调用 `executeDag` / `executeDagToTarget`
+ *   - store 回填节点 data（status/result/error）并追加 logs
+ * - 图片/视频任务（ImageNode 工具栏）：
+ *   - UI 触发 `runImageNodeAction({nodeId, action, prompt})`
+ *   - store 读取 `ImageData.selectedIndexes` 作为输入图片集合（未选择则直接提示）
+ *   - store 调用 `useApi` 注入的函数（applyImageAction / generateVideo）
+ *   - store 创建“结果节点”（image-* 或 video-*）并自动连线（image→image / image→video）
+ *   - 任务状态统一写入 `aiTask`（含整体/分项进度、错误信息、时间戳）
+ */
 export type NodeType = 'text_input' | 'llm_generate' | 'image' | 'video'
 
+/** 统一的运行状态（节点/任务共用） */
 export type RunStatus = 'idle' | 'running' | 'success' | 'error'
 
 export type ChatRole = 'system' | 'user'
@@ -97,6 +119,13 @@ export type ImageData = {
   title: string
   images: string[]
   activeIndex: number
+  /**
+   * 选择哪些图片参与 AI 操作（索引集合）
+   *
+   * - UI：图片节点以“最多 8 张网格 + 复选框/全选”维护该集合
+   * - store：`runImageNodeAction` 严格以该集合对应的图片 URL 作为输入（未选中则直接提示并返回）
+   */
+  selectedIndexes?: number[]
   status: RunStatus
   errorMessage?: string
   lastAction?: ImageAction
@@ -108,7 +137,13 @@ export type ImageData = {
   progress?: number
   progresses?: number[]
   imageErrors?: Array<string | null>
-  /** 统一的图片 AI 任务状态（局部重绘/抠图/超清/文字重绘/生成视频等） */
+  /**
+   * 统一的 AI 任务状态
+   *
+   * 用于局部重绘/抠图/超清/文字重绘/微调/生成视频等任务的可观测表达。
+   * - `items[idx]`：多图并发的最小粒度（进度/成功/失败原因）
+   * - `progress`：整体进度（items 的平均值）
+   */
   aiTask?: ImageAiTask
 }
 
@@ -190,10 +225,17 @@ type CanvasState = {
 
 let nodeSeq = 1
 
-// 仅用于前端模拟生成进度（不影响业务逻辑）
+/**
+ * 仅用于前端模拟任务进度（不影响业务逻辑）
+ *
+ * 背景：图片/视频生成的真实耗时在后端，前端通过“渐进进度 + 完成瞬间跳 100%”改善体感。
+ * 注意：必须在节点删除/任务结束时清理定时器，避免泄漏。
+ */
 const progressTimers = new Map<string, number>()
 
+/** localStorage：收藏夹持久化 key（版本化，便于未来迁移） */
 const FAVORITES_KEY = 'flow-canvas:favorites:v1'
+/** localStorage：UI 折叠状态持久化 key（版本化，便于未来迁移） */
 const UI_KEY = 'flow-canvas:ui:v1'
 
 function imageActionToLabel(action: ImageAction | string): string {
@@ -213,6 +255,11 @@ function imageActionToLabel(action: ImageAction | string): string {
   }
 }
 function loadFavorites(): FavoriteItem[] {
+  /**
+   * 数据流：localStorage → favorites（store）
+   * - 目标：容错读取（JSON 破损/字段缺失不影响启动）
+   * - 策略：只保留 url 合法项；缺失 id/createdAt 时补齐
+   */
   try {
     const raw = window.localStorage.getItem(FAVORITES_KEY)
     if (!raw) return []
@@ -232,6 +279,7 @@ function loadFavorites(): FavoriteItem[] {
 }
 
 function persistFavorites(favorites: FavoriteItem[]) {
+  /** 数据流：favorites（store）→ localStorage */
   try {
     window.localStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites))
   } catch {
@@ -240,6 +288,7 @@ function persistFavorites(favorites: FavoriteItem[]) {
 }
 
 function loadUi(): { leftPanelCollapsed: boolean; rightPanelCollapsed: boolean } {
+  /** 数据流：localStorage → UI 折叠状态（store） */
   try {
     const raw = window.localStorage.getItem(UI_KEY)
     if (!raw) return { leftPanelCollapsed: false, rightPanelCollapsed: false }
@@ -257,6 +306,7 @@ function loadUi(): { leftPanelCollapsed: boolean; rightPanelCollapsed: boolean }
 }
 
 function persistUi(ui: { leftPanelCollapsed: boolean; rightPanelCollapsed: boolean }) {
+  /** 数据流：UI 折叠状态（store）→ localStorage */
   try {
     window.localStorage.setItem(UI_KEY, JSON.stringify(ui))
   } catch {
@@ -335,6 +385,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set((state) => ({ edges: applyEdgeChanges(changes, state.edges) })),
   onConnect: (connection) =>
     set((state) => {
+      /**
+       * 连接规则（数据层兜底）：
+       * - video 节点只能作为“终止节点”：禁止从 video 往外连（UI 去掉 source handle，但这里仍做约束，避免被程序/未来 UI 绕过）
+       * - 其他节点：允许按 ReactFlow 默认策略新增边
+       */
       const sourceNode = state.nodes.find((n) => n.id === connection.source)
       if (sourceNode?.type === 'video') {
         // 视频节点只能作为终止节点：禁止从 video 往外连
@@ -504,6 +559,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           title: 'Image',
           images: [],
           activeIndex: 0,
+          selectedIndexes: [],
           status: 'idle',
         },
       }
@@ -522,6 +578,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   run: async (generateImage) => {
     if (get().isRunning) return
 
+    /**
+     * DAG 全量执行的数据流：
+     * - 输入：当前 `nodes/edges` + `generateImage`（由 useApi 注入的后端调用函数）
+     * - 执行：`executeDag` 内部做拓扑排序（Kahn）+ 循环检测 + 逐节点执行
+     * - 输出：这里目前只回收 llm_generate 的“最终图片 URL”（`llmImagesByNodeId`）
+     * - 回填：把执行结果写回节点 data，并写入日志（dag/node 两个 scope）
+     *
+     * 说明：本 store 不直接持有“执行器的中间过程”，只持有最终可展示状态，避免状态爆炸。
+     */
     get().appendLog({
       level: 'info',
       status: 'start',
@@ -587,7 +652,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         generateImage,
       })
 
-      // 执行成功：把图片 URL 回填到对应 llm_generate 节点
+      /**
+       * 执行成功回填策略：
+       * - text_input / image：仅更新 status（这些节点自身不产生新的产物）
+       * - llm_generate：若执行器返回了 URL，则写入 `resultImageUrl`
+       */
       set((state) => ({
         nodes: state.nodes.map((n) => {
           if (n.type === 'text_input') {
@@ -638,7 +707,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         message: 'DAG 执行完成',
       })
     } catch (e) {
-      // 异常兜底：把所有 llm_generate 标记为 error，提示重试
+      /**
+       * 异常兜底：
+       * - cycle：强提示“检查连线是否形成环”
+       * - 其他错误：透传 error.message
+       * - 回填：将可能受影响的节点标记为 error，并写入 globalError 与 logs
+       */
       const message =
         e instanceof DagCycleError
           ? '检测到环（cycle），请检查连线，确保是 DAG'
@@ -712,7 +786,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       nodeType: node.type,
     })
 
-    // 只把目标节点置为 running（上游节点不强制改状态，避免 UI 抖动）
+    /**
+     * 子图执行（到目标节点）的数据流：
+     * - 目标：只执行“到 nodeId 为止”的上游依赖子图（不会执行与其无关的分支）
+     * - UI：只把目标节点置为 running（上游节点不强制改状态，避免 UI 抖动）
+     * - 执行：`executeDagToTarget` 负责提取子图 + 拓扑执行
+     * - 回填：仅回填目标 llm_generate 的结果（resultImageUrl / errorMessage）
+     */
     set((state) => ({
       nodes: state.nodes.map((n) => {
         if (n.id !== nodeId) return n
@@ -829,7 +909,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       Math.max(0, Math.min(idx, Math.max(0, img.images.length - 1)))
     const activeUrl = img.images[clampIndex(img.activeIndex)] ?? ''
 
-    // 浏览器控制台打点：图片节点 AI 操作
+    // 浏览器控制台打点：图片节点 AI 操作（便于调试/回放）
     console.info('[AI][imageAction] start', {
       nodeId,
       nodeType: node.type,
@@ -850,17 +930,41 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       result: { imageCount: img.images.length },
     })
 
+    // 任务生成结果节点时，需要以“源节点坐标”为基准做布局
     const sourceNodeNow = get().nodes.find((n) => n.id === nodeId)
     if (!sourceNodeNow) {
       set({ globalError: '源节点不存在' })
       return
     }
 
-    // 用于重试/再次生成：优先使用 sourceImages（来源），否则使用当前 images
-    const inputImages = (img.sourceImages && img.sourceImages.length > 0 ? img.sourceImages : img.images) ?? []
-    const sourceImages = inputImages
-      .map((u) => u.trim())
+    /**
+     * 输入图片选择策略（非常关键）：
+     * - UI 通过 `selectedIndexes` 维护“要操作哪些图片”
+     * - store 严格使用该集合对应的 URL 作为 `sourceImages`
+     * - 若未选择任何图片：直接提示并返回，不启动任务（避免误操作对全量图片生效）
+     */
+    const clamp = (idx: number) => Math.max(0, Math.min(idx, Math.max(0, img.images.length - 1)))
+    const selected = (img.selectedIndexes ?? []).map(clamp).filter((x, i, arr) => arr.indexOf(x) === i)
+    const selectedImages = selected
+      .map((idx) => (img.images[idx] ?? '').trim())
       .filter((u) => u.length > 0)
+
+    if (selectedImages.length === 0) {
+      const message = '请先勾选要操作的图片（最多展示 8 张）。'
+      set({ globalError: message })
+      get().appendLog({
+        level: 'error',
+        status: 'error',
+        scope: 'image_action',
+        nodeId,
+        nodeType: node.type,
+        action,
+        message,
+      })
+      return
+    }
+
+    const sourceImages = selectedImages
 
     // 保存本次操作的来源信息，便于“再次生成”
     set((state) => ({
@@ -872,7 +976,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           data: {
             ...d,
             sourceNodeId: d.sourceNodeId ?? nodeId,
-            sourceImages: sourceImages.length > 0 ? sourceImages : [activeUrl].filter(Boolean),
+            sourceImages,
             sourceAction: action,
             sourcePrompt: prompt,
           },

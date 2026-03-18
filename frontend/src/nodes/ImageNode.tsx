@@ -34,6 +34,15 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
   const task = data.aiTask
   const taskRunning = task?.status === 'running'
 
+  const displayedImages = useMemo(() => data.images.slice(0, 8), [data.images])
+  const selectedSet = useMemo(() => new Set<number>(data.selectedIndexes ?? []), [data.selectedIndexes])
+  const displayedIndexes = useMemo(() => displayedImages.map((_, i) => i), [displayedImages])
+  const displayedSelectedCount = useMemo(
+    () => displayedIndexes.filter((idx) => selectedSet.has(idx)).length,
+    [displayedIndexes, selectedSet],
+  )
+  const allDisplayedSelected = displayedImages.length > 0 && displayedSelectedCount === displayedImages.length
+
   const removeActiveImage = useCallback(() => {
     updateNodeData(id, (prev) => {
       const typed = prev as ImageData
@@ -42,31 +51,68 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
       if (nextImages.length === 0) return typed
       nextImages.splice(idx, 1)
       const nextActive = Math.max(0, Math.min(idx, nextImages.length - 1))
+      const nextSelected = (typed.selectedIndexes ?? [])
+        .filter((x) => x !== idx)
+        .map((x) => (x > idx ? x - 1 : x))
       return {
         ...typed,
         images: nextImages,
         activeIndex: nextImages.length === 0 ? 0 : nextActive,
+        selectedIndexes: nextSelected,
         errorMessage: undefined,
       }
     })
   }, [id, updateNodeData])
 
-  const onChangeUrl = useCallback(
-    (value: string) => {
+  const removeImageAt = useCallback(
+    (idx: number) => {
       updateNodeData(id, (prev) => {
         const typed = prev as ImageData
-        const idx = Math.max(0, Math.min(typed.activeIndex, typed.images.length - 1))
+        const clamped = Math.max(0, Math.min(idx, Math.max(0, typed.images.length - 1)))
         const nextImages = typed.images.slice()
-        if (nextImages.length === 0) {
-          nextImages.push(value)
-          return { ...typed, images: nextImages, activeIndex: 0, errorMessage: undefined }
-        }
-        nextImages[idx] = value
+        if (nextImages.length === 0) return typed
+        nextImages.splice(clamped, 1)
+        const nextActive = Math.max(0, Math.min(typed.activeIndex, Math.max(0, nextImages.length - 1)))
+        const nextSelected = (typed.selectedIndexes ?? [])
+          .filter((x) => x !== clamped)
+          .map((x) => (x > clamped ? x - 1 : x))
         return {
           ...typed,
           images: nextImages,
+          activeIndex: nextImages.length === 0 ? 0 : nextActive,
+          selectedIndexes: nextSelected,
           errorMessage: undefined,
         }
+      })
+    },
+    [id, updateNodeData],
+  )
+
+  const toggleSelected = useCallback(
+    (idx: number) => {
+      updateNodeData(id, (prev) => {
+        const typed = prev as ImageData
+        const set = new Set<number>(typed.selectedIndexes ?? [])
+        if (set.has(idx)) set.delete(idx)
+        else set.add(idx)
+        return { ...typed, selectedIndexes: Array.from(set).sort((a, b) => a - b) }
+      })
+    },
+    [id, updateNodeData],
+  )
+
+  const toggleSelectAllDisplayed = useCallback(
+    (checked: boolean) => {
+      updateNodeData(id, (prev) => {
+        const typed = prev as ImageData
+        const set = new Set<number>(typed.selectedIndexes ?? [])
+        const max = Math.min(8, typed.images.length)
+        if (checked) {
+          for (let i = 0; i < max; i++) set.add(i)
+        } else {
+          for (let i = 0; i < max; i++) set.delete(i)
+        }
+        return { ...typed, selectedIndexes: Array.from(set).sort((a, b) => a - b) }
       })
     },
     [id, updateNodeData],
@@ -85,10 +131,17 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
       updateNodeData(id, (prev) => {
         const typed = prev as ImageData
         const nextImages = [...typed.images, ...urls]
+        const nextSelected =
+          (typed.selectedIndexes ?? []).length === 0
+            ? Array.from({ length: Math.min(8, nextImages.length) }, (_, i) => i)
+            : Array.from(new Set([...(typed.selectedIndexes ?? []), ...urls.map((_, i) => typed.images.length + i)])).sort(
+                (a, b) => a - b,
+              )
         return {
           ...typed,
           images: nextImages,
           activeIndex: Math.max(0, nextImages.length - urls.length),
+          selectedIndexes: nextSelected,
           errorMessage: undefined,
         }
       })
@@ -102,10 +155,15 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
     updateNodeData(id, (prev) => {
       const typed = prev as ImageData
       const nextImages = [...typed.images, url]
+      const nextSelected =
+        (typed.selectedIndexes ?? []).length === 0
+          ? Array.from({ length: Math.min(8, nextImages.length) }, (_, i) => i)
+          : Array.from(new Set([...(typed.selectedIndexes ?? []), nextImages.length - 1])).sort((a, b) => a - b)
       return {
         ...typed,
         images: nextImages,
         activeIndex: Math.max(0, nextImages.length - 1),
+        selectedIndexes: nextSelected,
         errorMessage: undefined,
       }
     })
@@ -114,7 +172,7 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
   return (
     <div
       className={[
-        'relative w-[340px] rounded-xl border bg-slate-900/70 shadow-sm backdrop-blur',
+        'relative w-[480px] rounded-xl border bg-slate-900/70 shadow-sm backdrop-blur',
         selected ? 'border-amber-300/60' : 'border-slate-700/80',
       ].join(' ')}
     >
@@ -174,189 +232,147 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
             </div>
           </div>
 
-          <input
-            value={activeUrl}
-            onChange={(e) => onChangeUrl(e.target.value)}
-            onPointerDown={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-            placeholder="https://..."
-            className="nodrag nowheel mt-2 w-full rounded-lg border border-slate-700/80 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-amber-300/60"
-          />
-
-          {data.images.length > 1 ? (
-            <div className="nodrag mt-2 flex flex-wrap gap-2">
-              {data.images.map((u, idx) => (
-                <button
-                  key={`${u}-${idx}`}
-                  type="button"
+          <div className="nodrag mt-3 rounded-2xl border border-slate-800 bg-slate-950/35 p-2">
+            <div className="flex items-center justify-between px-1 pb-2">
+              <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={allDisplayedSelected}
+                  onChange={(e) => toggleSelectAllDisplayed(e.target.checked)}
                   onPointerDown={(e) => e.stopPropagation()}
                   onMouseDown={(e) => e.stopPropagation()}
-                  onClick={() =>
-                    updateNodeData(id, (prev) => {
-                      const typed = prev as ImageData
-                      return { ...typed, activeIndex: idx }
-                    })
-                  }
-                  className={[
-                    'overflow-hidden rounded-lg border',
-                    idx === data.activeIndex ? 'border-amber-300/60' : 'border-slate-800',
-                  ].join(' ')}
-                  title={`第 ${idx + 1} 张`}
-                >
-                  <img src={u} alt={`thumb-${idx}`} className="h-10 w-10 object-cover" />
-                </button>
-              ))}
+                  className="h-4 w-4 accent-amber-300"
+                />
+                全选（前 {Math.min(8, data.images.length)} 张）
+              </label>
+              <div className="text-[11px] text-slate-400">
+                已选 {displayedSelectedCount}/{Math.min(8, data.images.length)}
+                {data.images.length > 8 ? ` · 共 ${data.images.length} 张（仅展示前 8 张）` : ''}
+              </div>
             </div>
-          ) : null}
 
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-slate-300">预览</div>
-          {taskRunning && data.images.length > 1 ? (
-            <div className="mt-2 overflow-hidden rounded-lg border border-slate-800 bg-slate-950/40">
-              <div className="grid grid-cols-2 gap-2 p-2">
-                {data.images.slice(0, 4).map((u, idx) => {
-                  const p = task?.items?.[idx]?.progress ?? task?.progress ?? 1
+            {displayedImages.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-800 bg-slate-950/30 px-3 py-6 text-center text-xs text-slate-400">
+                暂无图片。可上传或模拟上传后再执行操作。
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                {displayedImages.map((u, idx) => {
+                  const checked = selectedSet.has(idx)
+                  const favored = isFavorite(u)
                   return (
                     <div
                       key={`${u}-${idx}`}
-                      className="relative h-20 overflow-hidden rounded-lg border border-slate-800 bg-slate-950/60"
+                      className={[
+                        'relative overflow-hidden rounded-xl border bg-black/20',
+                        idx === data.activeIndex ? 'border-amber-300/60' : 'border-slate-800',
+                      ].join(' ')}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onMouseDown={(e) => e.stopPropagation()}
                     >
-                      <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-slate-800/40 via-slate-700/30 to-slate-800/40" />
-                      <div className="absolute inset-x-2 bottom-2 flex items-center justify-between text-[10px] text-slate-200">
-                        <span>#{idx + 1}</span>
-                        <span className="tabular-nums">{Math.min(99, p)}%</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          updateNodeData(id, (prev) => ({ ...(prev as ImageData), activeIndex: idx }))
+                        }}
+                        className="block w-full"
+                        title="点击设为预览图"
+                      >
+                        <img src={u} alt={`img-${idx}`} className="h-40 w-full object-cover" />
+                      </button>
+
+                      <label className="absolute left-2 top-2 inline-flex items-center gap-2 rounded-lg border border-slate-800/80 bg-slate-950/80 px-2 py-1 text-[11px] font-semibold text-slate-100 backdrop-blur">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleSelected(idx)}
+                          onClick={(e) => e.stopPropagation()}
+                          className="h-4 w-4 accent-amber-300"
+                        />
+                        #{idx + 1}
+                      </label>
+
+                      <div className="absolute right-2 top-2 flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            toggleFavorite(u)
+                          }}
+                          className={[
+                            'inline-flex h-8 w-8 items-center justify-center rounded-xl border',
+                            'border-slate-800/80 bg-slate-950/70 hover:border-slate-700',
+                            favored ? 'text-amber-200' : 'text-slate-200',
+                          ].join(' ')}
+                          title={favored ? '取消收藏' : '加入收藏'}
+                          aria-label={favored ? '取消收藏' : '加入收藏'}
+                        >
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                            <path
+                              fill="currentColor"
+                              d="M12 17.3 6.8 20a1 1 0 0 1-1.5-1.1l1-5.7-4.2-4A1 1 0 0 1 2.7 7l5.8-.8 2.6-5.2a1 1 0 0 1 1.8 0l2.6 5.2 5.8.8a1 1 0 0 1 .6 1.7l-4.2 4 1 5.7A1 1 0 0 1 17.2 20L12 17.3Z"
+                            />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openPreview({ title: data.title, imageUrl: u })
+                          }}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-slate-800/80 bg-slate-950/70 text-slate-100 hover:border-slate-700"
+                          title="预览大图"
+                          aria-label="预览大图"
+                        >
+                          <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-200" aria-hidden="true">
+                            <path
+                              fill="currentColor"
+                              d="M12 5c5.5 0 9.6 5 9.6 7s-4.1 7-9.6 7S2.4 14 2.4 12 6.5 5 12 5Zm0 2c-3.9 0-6.8 3.7-6.8 5s2.9 5 6.8 5 6.8-3.7 6.8-5-2.9-5-6.8-5Zm0 2.2A2.8 2.8 0 1 1 12 14.8a2.8 2.8 0 0 1 0-5.6Z"
+                            />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            removeImageAt(idx)
+                          }}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-200 hover:border-rose-500/50"
+                          title="删除该图片"
+                          aria-label="删除该图片"
+                        >
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                            <path
+                              fill="currentColor"
+                              d="M9 3h6l1 2h4v2H4V5h4l1-2Zm1 6h2v9h-2V9Zm4 0h2v9h-2V9ZM7 9h2v9H7V9Z"
+                            />
+                          </svg>
+                        </button>
                       </div>
                     </div>
                   )
                 })}
               </div>
+            )}
+          </div>
 
-              <div className="border-t border-slate-800 px-3 py-2">
-                <div className="flex items-center justify-between text-[11px] text-slate-300">
-                  <span>生成中（共 {data.images.length} 张）</span>
-                  <span className="tabular-nums">{Math.min(99, task?.progress ?? 1)}%</span>
-                </div>
-                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
-                  <div
-                    className="h-full rounded-full bg-amber-300/70"
-                    style={{ width: `${Math.min(99, task?.progress ?? 1)}%` }}
-                  />
-                </div>
-              </div>
-            </div>
-          ) : taskRunning ? (
-            <div className="mt-2 overflow-hidden rounded-lg border border-slate-800 bg-slate-950/40">
-              <div className="relative h-44 w-full">
-                <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-slate-800/40 via-slate-700/30 to-slate-800/40" />
-                <div className="absolute inset-x-3 bottom-3 rounded-xl border border-slate-800 bg-slate-950/70 p-3 backdrop-blur">
-                  <div className="flex items-center justify-between text-[11px] text-slate-300">
-                    <span>生成中</span>
-                    <span className="tabular-nums">{Math.min(99, task?.progress ?? 1)}%</span>
-                  </div>
-                  <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
-                    <div
-                      className="h-full rounded-full bg-amber-300/70"
-                      style={{ width: `${Math.min(99, task?.progress ?? 1)}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : activeUrl.trim().length > 0 ? (
-            <div className="relative mt-2 overflow-hidden rounded-lg border border-slate-800">
-              <img
-                src={activeUrl}
-                alt="image"
-                className="h-44 w-full object-cover"
-              />
-              <div
-                className="nodrag absolute right-2 top-2 flex items-center gap-1 rounded-2xl border border-slate-800/80 bg-slate-950/70 p-1 shadow-lg shadow-black/30 backdrop-blur"
-                onPointerDown={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-              >
-                <button
-                  type="button"
-                  onClick={() => openPreview({ title: data.title, imageUrl: activeUrl })}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-slate-100 hover:bg-slate-800/40"
-                  title="预览大图"
-                  aria-label="预览大图"
-                >
-                  <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-200" aria-hidden="true">
-                    <path
-                      fill="currentColor"
-                      d="M12 5c5.5 0 9.6 5 9.6 7s-4.1 7-9.6 7S2.4 14 2.4 12 6.5 5 12 5Zm0 2c-3.9 0-6.8 3.7-6.8 5s2.9 5 6.8 5 6.8-3.7 6.8-5-2.9-5-6.8-5Zm0 2.2A2.8 2.8 0 1 1 12 14.8a2.8 2.8 0 0 1 0-5.6Z"
-                    />
-                  </svg>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    appendChatMessage({ role: 'user', kind: 'image', imageUrl: activeUrl })
-                  }
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-slate-100 hover:bg-slate-800/40"
-                  title="加入会话"
-                  aria-label="加入会话"
-                >
-                  <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-200" aria-hidden="true">
-                    <path
-                      fill="currentColor"
-                      d="M4 4h13a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H9l-4.4 2.2A1 1 0 0 1 3 18.5V7a3 3 0 0 1 3-3Zm0 3v9.9L8.6 15H17a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1Z"
-                    />
-                  </svg>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => toggleFavorite(activeUrl)}
-                  className={[
-                    'inline-flex h-8 w-8 items-center justify-center rounded-xl hover:bg-slate-800/40',
-                    isFavorite(activeUrl) ? 'text-amber-200' : 'text-slate-100',
-                  ].join(' ')}
-                  title={isFavorite(activeUrl) ? '已在收藏夹' : '加入收藏夹'}
-                  aria-label={isFavorite(activeUrl) ? '已在收藏夹' : '加入收藏夹'}
-                >
-                  {isFavorite(activeUrl) ? (
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-                      <path
-                        fill="currentColor"
-                        d="M12 17.3 6.8 20a1 1 0 0 1-1.5-1.1l1-5.7-4.2-4A1 1 0 0 1 2.7 7l5.8-.8 2.6-5.2a1 1 0 0 1 1.8 0l2.6 5.2 5.8.8a1 1 0 0 1 .6 1.7l-4.2 4 1 5.7A1 1 0 0 1 17.2 20L12 17.3Z"
-                      />
-                    </svg>
-                  ) : (
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-                      <path
-                        fill="currentColor"
-                        d="M12 3.4 14.2 9.6l6.6.6-5 4.3 1.5 6.4L12 18l-5.3 2.9 1.5-6.4-5-4.3 6.6-.6L12 3.4Zm0 4.7-1.3 3.6-.2.6-.7.1-3.7.3 2.8 2.4.5.4-.1.6-.8 3.5 3-1.7.6-.3.6.3 3 1.7-.8-3.5-.1-.6.5-.4 2.8-2.4-3.7-.3-.7-.1-.2-.6L12 8.1Z"
-                      />
-                    </svg>
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={removeActiveImage}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-rose-200 hover:bg-rose-500/10"
-                  title="删除当前图片"
-                  aria-label="删除当前图片"
-                >
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-                    <path
-                      fill="currentColor"
-                      d="M9 3h6l1 2h4v2H4V5h4l1-2Zm1 6h2v9h-2V9Zm4 0h2v9h-2V9ZM7 9h2v9H7V9Z"
-                    />
-                  </svg>
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="mt-2 rounded-lg border border-dashed border-slate-800 bg-slate-950/30 px-3 py-6 text-center text-xs text-slate-400">
-              输入 URL 后显示预览
-            </div>
-          )}
         </div>
+
+        {taskRunning ? (
+          <div className="rounded-2xl bg-slate-950/35 px-3 py-3">
+            <div className="flex items-center justify-between text-[11px] text-slate-300">
+              <span>任务进行中</span>
+              <span className="tabular-nums">{Math.min(99, task?.progress ?? 1)}%</span>
+            </div>
+            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+              <div
+                className="h-full rounded-full bg-amber-300/70"
+                style={{ width: `${Math.min(99, task?.progress ?? 1)}%` }}
+              />
+            </div>
+          </div>
+        ) : null}
 
         {data.errorMessage ? (
           <div className="text-xs text-rose-300">{data.errorMessage}</div>
@@ -495,11 +511,12 @@ export function ImageNode(props: NodeProps<ImageNodeType>) {
                   type="button"
                   onClick={() => {
                     setMoreOpen(false)
+                    const wasFavorite = isFavorite(activeUrl)
                     toggleFavorite(activeUrl)
                     appendChatMessage({
                       role: 'system',
                       kind: 'text',
-                      text: isFavorite(activeUrl) ? '已从收藏夹移除。' : '已加入收藏夹。',
+                      text: wasFavorite ? '已从收藏夹移除。' : '已加入收藏夹。',
                     })
                   }}
                   className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-100 hover:bg-slate-800/40"

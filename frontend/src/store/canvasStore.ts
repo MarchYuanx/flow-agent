@@ -496,6 +496,7 @@ function findFreeNodePosition(
   preferred: { x: number; y: number },
   targetType: NodeType,
   nodes: CanvasNode[],
+  sourceNodeId?: string,
 ): { x: number; y: number } {
   const { w, h } = getNodeApproxSize(targetType)
 
@@ -503,10 +504,29 @@ function findFreeNodePosition(
   const stepY = 160
   const maxAttempts = 36
   const sameXRowCount = 6 // 每档尝试 6 行（y 方向）
-  const otherRects = nodes.map((n) => {
+  const allRects = nodes.map((n) => {
     const size = getNodeApproxSize(n.type as NodeType)
     return { id: n.id, x: n.position.x, y: n.position.y, w: size.w, h: size.h }
   })
+
+  /**
+   * 局部碰撞检测（按“生成源节点”分组）：
+   * - 若提供 sourceNodeId，则只检测：
+   *   1) 源节点本身
+   *   2) data.sourceNodeId 指向该源节点的派生结果节点（image/video）
+   * - 这样候选集通常远小于全量节点，查找开销更小，也更符合“同一簇就近排布”的视觉预期。
+   */
+  let otherRects = allRects
+  if (sourceNodeId) {
+    const relatedNodeIds = new Set<string>([sourceNodeId])
+    for (const n of nodes) {
+      if (n.type !== 'image' && n.type !== 'video') continue
+      const data = n.data as ImageData | VideoData
+      if (data.sourceNodeId === sourceNodeId) relatedNodeIds.add(n.id)
+    }
+    const relatedRects = allRects.filter((r) => relatedNodeIds.has(r.id))
+    if (relatedRects.length > 0) otherRects = relatedRects
+  }
 
   for (let i = 0; i < maxAttempts; i++) {
     const row = Math.floor(i / sameXRowCount)
@@ -1359,6 +1379,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
               { x: sourceNodeNow.position.x + 420, y: sourceNodeNow.position.y },
               'video',
               get().nodes,
+              nodeId,
             ),
             data: {
               title: 'Video (Result)',
@@ -1540,6 +1561,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
             { x: sourceNodeNow.position.x + 420, y: sourceNodeNow.position.y },
             'image',
             get().nodes,
+            nodeId,
           ),
           data: {
             title: `Image (Result)`,
